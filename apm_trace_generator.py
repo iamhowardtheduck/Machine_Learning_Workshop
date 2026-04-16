@@ -363,6 +363,12 @@ _APP_SERVICE_TARGETS = {
 
 # ─── Error document generator ─────────────────────────────────────────────────
 
+def _grouping_key(message: str) -> str:
+    """16-hex-char error grouping key — same algorithm APM Server uses."""
+    import hashlib
+    return hashlib.md5(message.encode()).hexdigest()[:16]
+
+
 def generate_error(
     service_name: str,
     trace_id: str,
@@ -373,30 +379,26 @@ def generate_error(
     txn_name: str,
     txn_type: str,
     http_method: str = "GET",
+    url_path: str = "/api/v1/internal",
+    url_domain: str = "api.lendpath.com",
     error_rate_override: float = None,
 ) -> dict:
     """
-    Build a single APM error document that matches the structure expected by
-    Kibana's APM Error view and Elastic ML error-rate jobs.
+    Build a single APM error document matching the shape Kibana's APM UI
+    expects. Field list derived from real APM error docs observed in the UI.
 
-    Fields added vs the old approach (mutating transaction docs):
-      • data_stream.type = "logs", data_stream.dataset = "apm.error"
-      • processor.event = "error"
-      • event.dataset = "apm.error"
-      • error.id      — unique 32-char hex
-      • error.culprit — culprit function name
-      NOTE: error.grouping_key and error.grouping_name are scripted/runtime
-      fields computed by APM Server — do NOT send them; ES rejects them with
-      "Cannot index data directly into a field with a [script] parameter".
-      • error.exception[]   — type, code, message, stacktrace frames
-      • parent.id           — the span that triggered this error
-      • span.id             — same as parent span
-      • timestamp.us        — epoch microseconds derived from ts_iso
+    Critical fields for APM Errors tab rendering:
+      transaction.sampled   — Kibana filters errors to sampled transactions only
+      error.grouping_key    — groups duplicate errors; without it errors don't
+                              appear in the errors list (mapped as keyword here,
+                              NOT a scripted field on self-managed clusters)
+      error.grouping_name   — display name for the error group
+      error.exception.handled — drives handled/unhandled badge in UI
+      url.*                 — APM errors tab shows URL context per error
     """
     errors_for_svc = _SERVICE_ERRORS.get(service_name, _SERVICE_ERRORS["lendpath-los"])
     exc_type, culprit, msg_tpl, exc_code = random.choice(errors_for_svc)
 
-    # Fill in any {detail} placeholder with a realistic-looking value
     detail = random.choice([
         f"APP-{random.randint(100000, 999999)}",
         f"loan_{random.randint(10000, 99999)}",
@@ -417,48 +419,59 @@ def generate_error(
     ]
 
     base = build_base(service_name, node_name)
-    # Error docs go to logs-apm.error-default, not traces-apm-default
+    # Error docs route to logs-apm.error-default via data_stream.type = "logs"
     base["data_stream"] = {
         "type":      "logs",
         "dataset":   "apm.error",
         "namespace": "default",
     }
+    # observer.hostname — APM server container identity (required by UI)
+    base["observer"]["hostname"] = base["observer"].get("hostname", "apm-server-01")
 
     ts_us = _ts_us(ts_iso)
+    url_full = f"https://{url_domain}{url_path}"
 
     return {
         **base,
-        "@timestamp": ts_iso,
-        "timestamp":  {"us": ts_us},
-        "processor":  {"event": "error", "name": "error"},
-        "event": {
-            "dataset": "apm.error",
-            "outcome": "failure",
-        },
-        "message": message,
+        "@timestamp":  ts_iso,
+        "timestamp":   {"us": ts_us},
+        "processor":   {"event": "error", "name": "error"},
+        "event":       {"dataset": "apm.error", "outcome": "failure"},
+        "message":     message,
         "error": {
-            "id":      _hex(16),
-            "culprit": culprit,
+            "id":           _hex(16),
+            "culprit":      culprit,
+            # grouping_key and grouping_name ARE regular keyword fields on
+            # self-managed clusters — they are only scripted on Elastic Cloud
+            # managed APM Server deployments. Map them as keyword in the
+            # index template and send them here so the APM Errors tab can
+            # group and display errors.
+            "grouping_key":  _grouping_key(message),
+            "grouping_name": message,
             "exception": [
                 {
                     "type":       exc_type,
-                    "code":       exc_code,
                     "message":    message,
+                    "handled":    True,   # drives handled/unhandled badge in UI
                     "stacktrace": stacktrace,
                 }
             ],
         },
         "trace":       {"id": trace_id},
         "transaction": {
-            "id":   transaction_id,
-            "name": txn_name,
-            "type": txn_type,
+            "id":      transaction_id,
+            "type":    txn_type,
+            "sampled": True,   # APM UI only shows errors for sampled transactions
         },
-        # parent.id and span.id both point to the owning span
         "parent": {"id": span_id},
         "span":   {"id": span_id},
-        "http": {
-            "request": {"method": http_method},
+        "http":   {"request": {"method": http_method}},
+        "url": {
+            "full":     url_full,
+            "original": url_full,
+            "path":     url_path,
+            "domain":   url_domain,
+            "scheme":   "https",
         },
     }
 
@@ -602,6 +615,8 @@ def _make_child_transaction(child_svc_name: str, trace_id: str,
             txn_name=txn_name,
             txn_type=txn_cfg["type"],
             http_method=http_method,
+            url_path=url_path,
+            url_domain="api.lendpath.com",
         )
         docs.append(err_doc)
 
@@ -790,6 +805,8 @@ def generate_trace(service_name: str, anomaly_chance: float = 0.03,
             txn_name=txn_name,
             txn_type=txn_cfg["type"],
             http_method=http_method,
+            url_path=url_path,
+            url_domain="api.lendpath.com",
         )
         root_error_docs.append(err_doc)
 
