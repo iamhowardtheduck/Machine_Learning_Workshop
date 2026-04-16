@@ -5,18 +5,42 @@ backfill_all-MLv2-WORKSHOP.py — 7-day historical backfill, then immediate
 
 Key differences from the original:
   • 7 days only (not 30)
-  • Peak volume capped at 10,000 events/hour
+  • Peak volume capped at 10,000 events/hour (bypassable by anomaly spikes)
   • Timestamps generated in the user's local timezone (auto-detected,
     overridable with --timezone)
   • After backfill, run_workshop.py starts automatically from where
     the backfill left off (--then-run is the expected default)
   • ML job definitions default to the MLv2 files (shorter bucket spans)
+  • Anomaly spike injection: random volume, error-rate, and latency spikes
+    injected into the historical timeline via --spike-* flags
+
+Spike flags (all optional):
+  --spike-count N          Number of anomaly spikes to inject (default: 0)
+  --spike-volume-mult X    Volume multiplier at spike peak (default: 5.0)
+  --spike-duration-hrs H   Duration of each spike in hours (default: 2)
+  --spike-error-rate X     Fraction of APM traces that become errors during
+                           spike (0.0–1.0, default: 0.25)
+  --spike-latency-mult X   APM latency multiplier during spike (default: 4.0)
+  --spike-seed N           Random seed for reproducible spike placement
+  --spike-types TYPE...    Which spike types to inject: volume, error_rate,
+                           latency (default: all three)
+  --spike-cap-override     Allow spikes to exceed the --max-hourly cap
+                           (default: True when using spikes)
 
 Usage:
     python backfill_all-MLv2-WORKSHOP.py \\
         --host https://localhost:9200 \\
         --user elastic --password changeme --no-verify-ssl \\
         --then-run
+
+    # Inject 3 random anomaly spikes:
+    python backfill_all-MLv2-WORKSHOP.py ... \\
+        --spike-count 3 --spike-volume-mult 8 --spike-duration-hrs 3 \\
+        --spike-error-rate 0.4 --spike-latency-mult 6 --spike-cap-override
+
+    # Volume-only spikes, reproducible placement:
+    python backfill_all-MLv2-WORKSHOP.py ... \\
+        --spike-count 2 --spike-types volume --spike-seed 42
 
     # Override timezone:
     python backfill_all-MLv2-WORKSHOP.py ... --timezone "America/New_York"
@@ -32,6 +56,8 @@ import sys
 import time
 import threading
 import signal
+import random
+import json
 from datetime import date, datetime, timedelta, timezone
 
 _HERE  = os.path.dirname(os.path.abspath(__file__))
@@ -46,19 +72,26 @@ try:
 except ImportError:
     _CAL = False
 
-# Maximum events per hour at peak (10,000 cap)
+# Maximum events per hour at peak (10,000 cap) — bypassed by spike-cap-override
 MAX_HOURLY = 10_000
 # 7-day default
 DEFAULT_DAYS = 7
 # Daily budget split: 70% SDG, 30% APM
-# With 10k/hr peak and ~8 business hours, weekday max = ~80,000/day
-# 70% = 56,000 SDG, 30% APM traces = ~4,000 (× ~6 docs = ~24,000 APM docs)
 DEFAULT_SDG_TPD    = 56_000
 DEFAULT_APM_TRACES = 4_000
 
+# ── Spike defaults ────────────────────────────────────────────────────────────
+SPIKE_DEFAULT_COUNT        = 0
+SPIKE_DEFAULT_VOLUME_MULT  = 5.0
+SPIKE_DEFAULT_DURATION_HRS = 2
+SPIKE_DEFAULT_ERROR_RATE   = 0.25
+SPIKE_DEFAULT_LATENCY_MULT = 4.0
+SPIKE_ALL_TYPES            = ["volume", "error_rate", "latency"]
+
+
+# ── Timezone helpers ──────────────────────────────────────────────────────────
 
 def get_local_tz():
-    """Detect the local system timezone, return a tzinfo object."""
     try:
         import tzlocal
         return tzlocal.get_localzone()
@@ -73,7 +106,6 @@ def get_local_tz():
 
 
 def resolve_tz(tz_name):
-    """Resolve a timezone name string to a tzinfo object."""
     if not tz_name:
         return get_local_tz()
     try:
@@ -86,14 +118,12 @@ def resolve_tz(tz_name):
         return pytz.timezone(tz_name)
     except ImportError:
         pass
-    # Fallback — try UTC offset like "UTC+5" or "Etc/GMT-5"
     print(f"  ⚠ Could not load timezone {tz_name!r} — zoneinfo/pytz not installed.")
     print(f"    Falling back to local system timezone.")
     return get_local_tz()
 
 
 def list_timezones():
-    """Print all available timezone names."""
     try:
         import zoneinfo
         zones = sorted(zoneinfo.available_timezones())
@@ -113,6 +143,119 @@ def list_timezones():
     print()
 
 
+# ── Spike generation ──────────────────────────────────────────────────────────
+
+def generate_spikes(days, spike_count, spike_duration_hrs, spike_volume_mult,
+                    spike_error_rate, spike_latency_mult, spike_types,
+                    spike_seed=None):
+    """
+    Generate a list of spike descriptor dicts, each with:
+      start_hour  : int — hour offset from backfill start (0 = first hour)
+      end_hour    : int — exclusive end hour
+      types       : list of str — which anomaly types are active
+      volume_mult : float
+      error_rate  : float
+      latency_mult: float
+
+    Spikes are placed randomly across the backfill window, with a minimum
+    gap of spike_duration_hrs between them to avoid overlaps.
+    """
+    if spike_count == 0:
+        return []
+
+    rng          = random.Random(spike_seed)
+    total_hours  = days * 24
+    # Keep spikes away from the very first and last hour
+    placeable    = list(range(1, total_hours - spike_duration_hrs - 1))
+    spikes       = []
+    blocked      = set()
+
+    attempts = 0
+    while len(spikes) < spike_count and attempts < spike_count * 200:
+        attempts += 1
+        if not placeable:
+            break
+        h = rng.choice(placeable)
+        # Check no overlap with existing spikes (+ buffer of 1hr on each side)
+        if any(h in blocked for _ in [1]):
+            continue
+        if h in blocked:
+            continue
+        spikes.append({
+            "start_hour":   h,
+            "end_hour":     h + spike_duration_hrs,
+            "types":        list(spike_types),
+            "volume_mult":  spike_volume_mult,
+            "error_rate":   spike_error_rate,
+            "latency_mult": spike_latency_mult,
+        })
+        # Block this window + buffer
+        for bh in range(max(0, h - spike_duration_hrs),
+                        min(total_hours, h + spike_duration_hrs * 2 + 1)):
+            blocked.add(bh)
+        # Remove blocked hours from placeable
+        placeable = [x for x in placeable if x not in blocked]
+
+    spikes.sort(key=lambda s: s["start_hour"])
+    return spikes
+
+
+def spike_at_hour(spikes, hour_offset):
+    """Return the active spike dict for a given hour offset, or None."""
+    for s in spikes:
+        if s["start_hour"] <= hour_offset < s["end_hour"]:
+            return s
+    return None
+
+
+def print_spike_schedule(spikes, days, tz):
+    if not spikes:
+        print("  No anomaly spikes configured.")
+        return
+
+    today     = date.today()
+    start_day = today - timedelta(days=days - 1)
+    tz_name   = getattr(tz, 'key', getattr(tz, 'zone', str(tz)))
+
+    print(f"\n  {'#':<4} {'Date':<12} {'Time window':<22} {'Types':<30} "
+          f"{'Vol ×':>6} {'Err%':>6} {'Lat ×':>6}")
+    print(f"  {'-'*88}")
+
+    for i, s in enumerate(spikes, 1):
+        day_offset  = s["start_hour"] // 24
+        hour_start  = s["start_hour"] % 24
+        hour_end    = s["end_hour"] % 24 if s["end_hour"] % 24 != 0 else 24
+        spike_date  = start_day + timedelta(days=day_offset)
+        types_str   = ", ".join(s["types"])
+        vol_str     = f"{s['volume_mult']:.1f}×" if "volume" in s["types"] else "—"
+        err_str     = f"{s['error_rate']*100:.0f}%" if "error_rate" in s["types"] else "—"
+        lat_str     = f"{s['latency_mult']:.1f}×" if "latency" in s["types"] else "—"
+        window_str  = f"{hour_start:02d}:00–{hour_end:02d}:00"
+        print(f"  {i:<4} {str(spike_date):<12} {window_str:<22} {types_str:<30} "
+              f"{vol_str:>6} {err_str:>6} {lat_str:>6}")
+
+    print(f"  {'-'*88}")
+    print(f"  {len(spikes)} spike(s) across {days} days  (timezone: {tz_name})")
+
+
+def write_spike_manifest(spikes, days):
+    """
+    Write spikes to a JSON manifest so sub-scripts can read it.
+    Returns the manifest path (or None if no spikes).
+    """
+    if not spikes:
+        return None
+    manifest_path = os.path.join(_HERE, "anomaly_spikes.json")
+    with open(manifest_path, "w") as f:
+        json.dump({
+            "days":   days,
+            "spikes": spikes,
+        }, f, indent=2)
+    return manifest_path
+
+
+# ── Output helpers ────────────────────────────────────────────────────────────
+
 def stream_output(proc, prefix, logfile):
     with open(logfile, "w") as lf:
         for line in proc.stdout:
@@ -122,13 +265,13 @@ def stream_output(proc, prefix, logfile):
                 lf.write(txt + "\n")
 
 
-def schedule_preview(days, sdg_weekday, apm_weekday, tz):
+def schedule_preview(days, sdg_weekday, apm_weekday, tz, spikes):
     today     = date.today()
     start_day = today - timedelta(days=days - 1)
     tz_name   = getattr(tz, 'key', getattr(tz, 'zone', str(tz)))
     print(f"\n  {'Date':<12} {'Day':<4} {'Type':<9} {'SDG docs':>10} "
-          f"{'APM traces':>11} {'Total':>10} {'Peak /hr':>10}")
-    print(f"  {'-'*70}")
+          f"{'APM traces':>11} {'Total':>10} {'Peak /hr':>10} {'Spikes':>8}")
+    print(f"  {'-'*80}")
     grand = 0
     for d in range(days):
         day    = start_day + timedelta(days=d)
@@ -137,18 +280,26 @@ def schedule_preview(days, sdg_weekday, apm_weekday, tz):
         apm    = round(apm_weekday * factor)
         apm_d  = apm * 6
         total  = sdg + apm_d
-        # Approx peak hour = 13% of daily (based on 1PM weight)
         peak_hr = min(round(total * 0.13), MAX_HOURLY)
         grand  += total
         dtype  = ("HOLIDAY" if (_CAL and is_us_federal_holiday(day))
                   else "weekend" if day.weekday() >= 5
                   else "workday")
+        # Count spikes on this day
+        day_start_hr = d * 24
+        day_end_hr   = day_start_hr + 24
+        day_spikes   = [s for s in spikes
+                        if s["start_hour"] < day_end_hr
+                        and s["end_hour"] > day_start_hr]
+        spike_str = f"⚡ ×{len(day_spikes)}" if day_spikes else ""
         print(f"  {str(day):<12} {day.strftime('%a'):<4} {dtype:<9} "
-              f"{sdg:>10,} {apm:>11,} {total:>10,} {peak_hr:>10,}")
-    print(f"  {'-'*70}")
+              f"{sdg:>10,} {apm:>11,} {total:>10,} {peak_hr:>10,} {spike_str:>8}")
+    print(f"  {'-'*80}")
     print(f"  {'TOTAL':<47} {grand:>10,}")
-    print(f"  Max events/hour at peak: {MAX_HOURLY:,} (hard cap)")
+    print(f"  Max events/hour at peak: {MAX_HOURLY:,} (cap — bypassed during spikes)")
 
+
+# ── Main backfill runner ──────────────────────────────────────────────────────
 
 def run_backfill(host, user, password, verify_ssl,
                  days, sdg_target, apm_traces, tz,
@@ -160,21 +311,23 @@ def run_backfill(host, user, password, verify_ssl,
                  sdg_script_path=None,
                  bootstrap_script=None,
                  kibana_host=None,
-                 job_files=None):
+                 job_files=None,
+                 # ── spike params ──
+                 spikes=None,
+                 spike_cap_override=True):
 
+    spikes = spikes or []
     run_script = os.path.join(_HERE, "run_workshop.py")
 
-    # Resolve APM backfill script — v2 preferred, original as fallback
+    # Resolve APM backfill script
     apm_script = os.path.join(_HERE, "backfill_apm-MLv2-WORKSHOP.py")
     if not os.path.exists(apm_script):
         apm_script = os.path.join(_HERE, "backfill_apm.py")
     if not os.path.exists(apm_script):
         print(f"ERROR: APM backfill script not found in {_HERE}")
-        print(f"  Tried: backfill_apm-MLv2-WORKSHOP.py, backfill_apm.py")
         sys.exit(1)
 
     # Resolve SDG backfill script
-    # sdg_script_path may be an explicit override from --sdg-script
     if sdg_script_path and os.path.exists(sdg_script_path):
         sdg_script = sdg_script_path
     else:
@@ -183,17 +336,23 @@ def run_backfill(host, user, password, verify_ssl,
             sdg_script = os.path.join(_HERE, "backfill_sdg.py")
         if not os.path.exists(sdg_script):
             print(f"ERROR: SDG backfill script not found in {_HERE}")
-            print(f"  Tried: backfill_sdg-MLv2-WORKSHOP.py, backfill_sdg.py")
             sys.exit(1)
 
     for s in (sdg_script, apm_script):
         if not os.path.exists(s):
             print(f"ERROR: {s} not found"); sys.exit(1)
 
+    # Write spike manifest for sub-scripts to consume
+    manifest_path = write_spike_manifest(spikes, days)
+
     tz_name = getattr(tz, 'key', getattr(tz, 'zone', str(tz)))
     common  = ["--host", host, "--user", user, "--password", password] \
               + (["--no-verify-ssl"] if not verify_ssl else []) \
               + ["--timezone", tz_name]
+
+    # Effective hourly cap: unlimited (sys.maxsize proxy) when spike_cap_override
+    # is set and spikes are present; otherwise honour max_hourly.
+    effective_cap = 999_999_999 if (spikes and spike_cap_override) else max_hourly
 
     sdg_cmd = [PYTHON, sdg_script] + common + [
         "--days",                  str(days),
@@ -202,7 +361,7 @@ def run_backfill(host, user, password, verify_ssl,
         "--bulk-size",             str(sdg_bulk),
         "--parallel-bulk-threads", str(sdg_pb_threads),
         "--config",                sdg_config,
-        "--max-hourly",            str(max_hourly),
+        "--max-hourly",            str(effective_cap),
     ]
     apm_cmd = [PYTHON, apm_script] + common + [
         "--days",                  str(days),
@@ -210,8 +369,13 @@ def run_backfill(host, user, password, verify_ssl,
         "--workers",               str(apm_workers),
         "--bulk-size",             str(apm_bulk),
         "--parallel-bulk-threads", str(apm_pb_threads),
-        "--max-hourly",            str(max_hourly),
+        "--max-hourly",            str(effective_cap),
     ]
+
+    # Pass spike manifest path to sub-scripts if they support it
+    if manifest_path:
+        sdg_cmd += ["--spike-manifest", manifest_path]
+        apm_cmd += ["--spike-manifest", manifest_path]
 
     print(f"\n{'='*68}")
     print(f"  LendPath ML Workshop v2 — {days}-Day Historical Backfill")
@@ -219,12 +383,23 @@ def run_backfill(host, user, password, verify_ssl,
     print(f"  Days:              {days}")
     print(f"  SDG weekday/day:   {sdg_target:,} docs")
     print(f"  APM weekday/day:   {apm_traces:,} traces (~{apm_traces*6:,} docs)")
-    print(f"  Peak cap:          {max_hourly:,} events/hour")
+    print(f"  Peak cap:          {max_hourly:,} events/hour"
+          + (" (bypassed during spikes)" if spikes and spike_cap_override else ""))
     print(f"  Timezone:          {tz_name}")
     print(f"  Target:            {host}")
 
+    if spikes:
+        print(f"\n  Anomaly spikes:    {len(spikes)} injected")
+        spike_type_labels = sorted({t for s in spikes for t in s["types"]})
+        print(f"  Spike types:       {', '.join(spike_type_labels)}")
+        if manifest_path:
+            print(f"  Spike manifest:    {os.path.basename(manifest_path)}")
+
     if _CAL:
-        schedule_preview(days, sdg_target, apm_traces, tz)
+        schedule_preview(days, sdg_target, apm_traces, tz, spikes)
+
+    if spikes:
+        print_spike_schedule(spikes, days, tz)
 
     print(f"\n  Sub-scripts:")
     print(f"    SDG: {os.path.basename(sdg_script)}")
@@ -259,7 +434,7 @@ def run_backfill(host, user, password, verify_ssl,
     signal.signal(signal.SIGTERM, shutdown)
 
     for p in procs: p.wait()
-    for t in threads:  t.join(timeout=5)
+    for t in threads: t.join(timeout=5)
 
     elapsed = time.time() - start
     h, rem  = divmod(int(elapsed), 3600)
@@ -274,11 +449,12 @@ def run_backfill(host, user, password, verify_ssl,
         print("    Review backfill_sdg.log and backfill_apm.log.")
     else:
         print(f"  ✓ {days} days of historical data indexed.")
+        if spikes:
+            print(f"  ✓ {len(spikes)} anomaly spike(s) injected into timeline.")
         print("  ✓ Starting live generators now (continuing from present)…")
     print(f"{'='*68}\n")
 
     # ── Post-backfill sequence ────────────────────────────────────────────────
-    # Resolve bootstrap script
     bs = bootstrap_script
     if bs is None:
         for _bname in ["bootstrap-MLv2-WORKSHOP.py", "bootstrap.py"]:
@@ -297,7 +473,6 @@ def run_backfill(host, user, password, verify_ssl,
     if job_files:
         bs_common += ["--job-files"] + job_files
 
-    # ── Step A: Start AD datafeeds ───────────────────────────────────────────
     if bs and os.path.exists(bs):
         print(f"\n{'='*68}")
         print(f"  Post-Backfill Automation")
@@ -308,9 +483,7 @@ def run_backfill(host, user, password, verify_ssl,
         print("▸ Step 1/3 — Starting AD datafeeds…")
         try:
             result = subprocess.run(
-                [PYTHON, bs] + bs_common + ["--skip-kibana"],
-                cwd=_HERE
-            )
+                [PYTHON, bs] + bs_common + ["--skip-kibana"], cwd=_HERE)
             if result.returncode == 0:
                 print("  ✓ AD datafeeds started")
             else:
@@ -318,14 +491,12 @@ def run_backfill(host, user, password, verify_ssl,
         except Exception as e:
             print(f"  ⚠ Could not start AD datafeeds: {e}")
 
-        # ── Step B: Create and start DFA jobs ─────────────────────────────────
         print()
         print("▸ Step 2/3 — Creating and starting DFA jobs…")
         try:
             result = subprocess.run(
                 [PYTHON, bs] + bs_common + ["--create-dfa", "--skip-kibana"],
-                cwd=_HERE
-            )
+                cwd=_HERE)
             if result.returncode == 0:
                 print("  ✓ DFA jobs created and started")
             else:
@@ -337,11 +508,10 @@ def run_backfill(host, user, password, verify_ssl,
     else:
         print(f"\n  ⚠ bootstrap script not found — skipping AD/DFA automation.")
         print(f"    Run manually:")
-        print(f"      python bootstrap.py ...  (then start datafeeds manually in Kibana)")
+        print(f"      python bootstrap.py ...")
         print(f"      python bootstrap.py --create-dfa ...")
         print()
 
-    # ── Step C: Start live generators ────────────────────────────────────────
     if then_run:
         if not os.path.exists(run_script):
             print(f"WARNING: run_workshop.py not found.")
@@ -361,9 +531,9 @@ def run_backfill(host, user, password, verify_ssl,
         print(f"  Next:  python run_workshop.py {run_common}\n")
 
 
+# ── Config loader ─────────────────────────────────────────────────────────────
 
 def _load_workshop_config():
-    """Load connection config saved by bootstrap.py."""
     for search in [
         os.path.dirname(os.path.realpath(os.path.abspath(__file__))),
         os.getcwd(),
@@ -380,107 +550,124 @@ def _load_workshop_config():
     return {}
 
 
+# ── Argument parsing ──────────────────────────────────────────────────────────
+
 def main():
     p = argparse.ArgumentParser(
-        description="LendPath ML Workshop v2 — 7-day backfill with 10k/hr cap",
+        description="LendPath ML Workshop v2 — 7-day backfill with anomaly spike injection",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Basic run — backfill 7 days then go live:
+  # Basic backfill, then go live:
   python backfill_all-MLv2-WORKSHOP.py \\
       --host https://localhost:9200 \\
-      --user elastic --password changeme --no-verify-ssl \\
-      --then-run
+      --user elastic --password changeme --no-verify-ssl --then-run
 
-  # Override timezone:
-  python backfill_all-MLv2-WORKSHOP.py ... --timezone "America/Chicago"
+  # 3 random anomaly spikes (volume + error-rate + latency):
+  python backfill_all-MLv2-WORKSHOP.py ... \\
+      --spike-count 3 --spike-volume-mult 8 --spike-duration-hrs 3 \\
+      --spike-error-rate 0.4 --spike-latency-mult 6
+
+  # Volume-only spikes, reproducible placement:
+  python backfill_all-MLv2-WORKSHOP.py ... \\
+      --spike-count 2 --spike-types volume --spike-seed 42
 
   # List all available timezones:
   python backfill_all-MLv2-WORKSHOP.py --list-timezones
         """
     )
+
+    # ── Connection ─────────────────────────────────────────────────────────────
     p.add_argument("--host",          default="https://localhost:9200")
     p.add_argument("--user",          default="elastic")
     p.add_argument("--password",      default="changeme")
     p.add_argument("--no-verify-ssl", action="store_true")
-    p.add_argument("--days",          type=int,  default=DEFAULT_DAYS,
-                   help=f"Days of history to generate (default: {DEFAULT_DAYS})")
-    p.add_argument("--sdg-target",    type=int,  default=DEFAULT_SDG_TPD,
-                   help=f"Weekday SDG docs/day (default: {DEFAULT_SDG_TPD:,})")
-    p.add_argument("--apm-traces",    type=int,  default=DEFAULT_APM_TRACES,
-                   help=f"Weekday APM traces/day (default: {DEFAULT_APM_TRACES:,})")
-    p.add_argument("--sdg-workers",   type=int,  default=6)
-    p.add_argument("--apm-workers",   type=int,  default=4)
-    p.add_argument("--sdg-bulk",      type=int,  default=1000)
-    p.add_argument("--apm-bulk",      type=int,  default=300)
-    p.add_argument("--sdg-pb-threads",type=int,  default=2)
-    p.add_argument("--apm-pb-threads",type=int,  default=2)
-    p.add_argument("--sdg-config",    default="mortgage-workshop.yml")
-    p.add_argument("--sdg-script",    default=None, metavar="PATH",
-                   help="Path to the SDG entry-point script (e.g. sdg-prime.py). "
-                        "Passed to run_workshop.py after backfill completes. "
-                        "Auto-detected from workshop directory if not set.")
-    p.add_argument("--max-hourly",    type=int, default=MAX_HOURLY,
-                   help=f"Max events/hour at peak (default: {MAX_HOURLY:,}). "
-                        "Passed through to sub-scripts as a constant.")
-    p.add_argument("--timezone",      default=None, metavar="TZ",
-                   help="Timezone for timestamp generation, e.g. 'America/New_York'. "
-                        "Defaults to system local time. Use --list-timezones to see all options.")
-    p.add_argument("--list-timezones", action="store_true",
-                   help="Print all available timezone names and exit")
-    p.add_argument("--bootstrap-script", default=None, metavar="PATH",
-                   help="Path to bootstrap.py to run after backfill. "
-                        "Auto-detected if not set.")
-    p.add_argument("--kibana-host",    default=None, metavar="URL",
-                   help="Kibana URL for bootstrap post-backfill steps "
-                        "(e.g. http://localhost:5601). Skips Kibana if not set.")
-    p.add_argument("--job-files",      nargs="+", default=None, metavar="FILE",
-                   help="ML job definition files passed to bootstrap. "
-                        "Defaults to bootstrap's own defaults.")
-    p.add_argument("--then-run",       action="store_true", default=True,
-                   help="Start live generators immediately after backfill (default: True)")
-    p.add_argument("--no-then-run",   action="store_false", dest="then_run",
-                   help="Do not start live generators after backfill")
 
-    # Load previously saved bootstrap config and use as defaults for
-    # any arg the user didn't explicitly pass on the command line.
+    # ── Backfill config ────────────────────────────────────────────────────────
+    p.add_argument("--days",          type=int, default=DEFAULT_DAYS,
+                   help=f"Days of history to generate (default: {DEFAULT_DAYS})")
+    p.add_argument("--sdg-target",    type=int, default=DEFAULT_SDG_TPD)
+    p.add_argument("--apm-traces",    type=int, default=DEFAULT_APM_TRACES)
+    p.add_argument("--sdg-workers",   type=int, default=6)
+    p.add_argument("--apm-workers",   type=int, default=4)
+    p.add_argument("--sdg-bulk",      type=int, default=1000)
+    p.add_argument("--apm-bulk",      type=int, default=300)
+    p.add_argument("--sdg-pb-threads",type=int, default=2)
+    p.add_argument("--apm-pb-threads",type=int, default=2)
+    p.add_argument("--sdg-config",    default="mortgage-workshop.yml")
+    p.add_argument("--sdg-script",    default=None, metavar="PATH")
+    p.add_argument("--max-hourly",    type=int, default=MAX_HOURLY,
+                   help=f"Normal peak cap (default: {MAX_HOURLY:,}). "
+                        "Bypassed during spikes when --spike-cap-override is set.")
+    p.add_argument("--timezone",      default=None, metavar="TZ")
+    p.add_argument("--list-timezones",action="store_true")
+    p.add_argument("--bootstrap-script", default=None, metavar="PATH")
+    p.add_argument("--kibana-host",   default=None, metavar="URL")
+    p.add_argument("--job-files",     nargs="+", default=None, metavar="FILE")
+    p.add_argument("--then-run",      action="store_true", default=True)
+    p.add_argument("--no-then-run",   action="store_false", dest="then_run")
+
+    # ── Anomaly spike flags ────────────────────────────────────────────────────
+    spike = p.add_argument_group(
+        "anomaly spikes",
+        "Inject randomised anomaly windows into the historical timeline.\n"
+        "Sub-scripts receive spike windows via anomaly_spikes.json manifest."
+    )
+    spike.add_argument("--spike-count", type=int, default=SPIKE_DEFAULT_COUNT,
+                       metavar="N",
+                       help="Number of anomaly spikes to inject (default: 0 = none)")
+    spike.add_argument("--spike-volume-mult", type=float,
+                       default=SPIKE_DEFAULT_VOLUME_MULT, metavar="X",
+                       help=f"Volume multiplier at spike peak (default: {SPIKE_DEFAULT_VOLUME_MULT}×)")
+    spike.add_argument("--spike-duration-hrs", type=int,
+                       default=SPIKE_DEFAULT_DURATION_HRS, metavar="H",
+                       help=f"Duration of each spike in hours (default: {SPIKE_DEFAULT_DURATION_HRS})")
+    spike.add_argument("--spike-error-rate", type=float,
+                       default=SPIKE_DEFAULT_ERROR_RATE, metavar="X",
+                       help=f"APM error fraction during spike, 0–1 (default: {SPIKE_DEFAULT_ERROR_RATE})")
+    spike.add_argument("--spike-latency-mult", type=float,
+                       default=SPIKE_DEFAULT_LATENCY_MULT, metavar="X",
+                       help=f"APM latency multiplier during spike (default: {SPIKE_DEFAULT_LATENCY_MULT}×)")
+    spike.add_argument("--spike-types", nargs="+",
+                       choices=SPIKE_ALL_TYPES, default=SPIKE_ALL_TYPES,
+                       metavar="TYPE",
+                       help=f"Spike types: {', '.join(SPIKE_ALL_TYPES)} (default: all)")
+    spike.add_argument("--spike-seed", type=int, default=None, metavar="N",
+                       help="Random seed for reproducible spike placement")
+    spike.add_argument("--spike-cap-override", action="store_true", default=True,
+                       help="Allow spikes to exceed --max-hourly cap (default: True)")
+    spike.add_argument("--no-spike-cap-override", action="store_false",
+                       dest="spike_cap_override",
+                       help="Keep spikes within --max-hourly cap")
+
+    # ── Load saved config, parse, back-fill ───────────────────────────────────
     _cfg = _load_workshop_config()
     if _cfg:
-        # argparse doesn't support post-parse defaults elegantly, so we
-        # patch the namespace directly for args left at their default values.
         _defaults = {
-            "host":           "https://localhost:9200",
-            "user":           "elastic",
-            "password":       "changeme",
-            "kibana_host":    None,
-            "no_verify_ssl":  False,
-            "timezone":       None,
-            "job_files":      None,
+            "host": "https://localhost:9200", "user": "elastic",
+            "password": "changeme", "kibana_host": None,
+            "no_verify_ssl": False, "timezone": None, "job_files": None,
         }
-        # Parse first so explicit CLI args take priority
         args = p.parse_args()
-        # Then back-fill from config only where the user left the default
-        if args.host          == _defaults["host"]         and _cfg.get("host"):
-            args.host          = _cfg["host"]
-        if args.user          == _defaults["user"]         and _cfg.get("user"):
-            args.user          = _cfg["user"]
-        if args.password      == _defaults["password"]     and _cfg.get("password"):
-            args.password      = _cfg["password"]
+        if args.host     == _defaults["host"]     and _cfg.get("host"):
+            args.host     = _cfg["host"]
+        if args.user     == _defaults["user"]     and _cfg.get("user"):
+            args.user     = _cfg["user"]
+        if args.password == _defaults["password"] and _cfg.get("password"):
+            args.password = _cfg["password"]
         if not args.no_verify_ssl and _cfg.get("no_verify_ssl"):
             args.no_verify_ssl = _cfg["no_verify_ssl"]
         if not getattr(args, "kibana_host", None) and _cfg.get("kibana_host"):
-            args.kibana_host   = _cfg["kibana_host"]
+            args.kibana_host = _cfg["kibana_host"]
         if not getattr(args, "timezone", None) and _cfg.get("timezone"):
-            args.timezone      = _cfg["timezone"]
+            args.timezone = _cfg["timezone"]
         if not getattr(args, "job_files", None) and _cfg.get("job_files"):
-            args.job_files     = _cfg["job_files"]
+            args.job_files = _cfg["job_files"]
     else:
         args = p.parse_args()
-        if not _cfg:
-            print("  ℹ  No workshop-config.json found — using CLI args only.")
-            print("     Run bootstrap.py first to save connection settings.")
-            print()
-
+        print("  ℹ  No workshop-config.json found — using CLI args only.")
+        print("     Run bootstrap.py first to save connection settings.")
+        print()
 
     if args.list_timezones:
         list_timezones()
@@ -489,6 +676,18 @@ Examples:
     tz = resolve_tz(args.timezone)
     tz_name = getattr(tz, 'key', getattr(tz, 'zone', str(tz)))
     print(f"\n  Detected timezone: {tz_name}")
+
+    # ── Generate spikes ───────────────────────────────────────────────────────
+    spikes = generate_spikes(
+        days=args.days,
+        spike_count=args.spike_count,
+        spike_duration_hrs=args.spike_duration_hrs,
+        spike_volume_mult=args.spike_volume_mult,
+        spike_error_rate=args.spike_error_rate,
+        spike_latency_mult=args.spike_latency_mult,
+        spike_types=args.spike_types,
+        spike_seed=args.spike_seed,
+    )
 
     run_backfill(
         host=args.host, user=args.user, password=args.password,
@@ -503,6 +702,8 @@ Examples:
         bootstrap_script=args.bootstrap_script,
         kibana_host=args.kibana_host,
         job_files=args.job_files,
+        spikes=spikes,
+        spike_cap_override=args.spike_cap_override,
     )
 
 
