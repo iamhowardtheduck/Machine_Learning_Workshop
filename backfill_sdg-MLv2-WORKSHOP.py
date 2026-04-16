@@ -4,9 +4,11 @@ backfill_sdg-MLv2-WORKSHOP.py — 7-day SDG backfill with:
   • 10,000 events/hour hard cap at peak
   • Timestamps in user's local timezone (auto-detected or --timezone)
   • 7-day default window
+  • Anomaly spike injection via --spike-manifest (volume spikes)
 """
 
 import argparse
+import json
 import os
 import random
 import sys
@@ -54,31 +56,22 @@ from business_calendar import (
     day_volume_factor, is_us_federal_holiday, hour_weights_for_day
 )
 
-# ---------------------------------------------------------------------------
-# Field compiler — load from backfill_sdg.py via importlib, fall back to
-# a faithful inline implementation if the file isn't importable.
-# ---------------------------------------------------------------------------
 _sdg_mod = _file_import("backfill_sdg")
 if _sdg_mod is not None:
     compile_field   = _sdg_mod.compile_field
     make_doc        = _sdg_mod.make_doc
     STREAM_WEIGHTS  = _sdg_mod.STREAM_WEIGHTS
 else:
-
     STREAM_WEIGHTS = {}
 
     def compile_field(f):
-        """Minimal compile_field matching the real backfill_sdg.py logic."""
         name  = f.get("name", "")
         ftype = f.get("type", "value")
-        # @timestamp and explicit timestamp type → substituted by make_doc
         if name == "@timestamp" or ftype == "timestamp":
             return (name, None)
-        # Static value fields — return a lambda that always returns the value
         if ftype == "value" or "value" in f:
             v = f.get("value")
             return (name, lambda _v=v: _v)
-        # Anything else without a generator → skip (return empty string constant)
         return (name, lambda: None)
 
     def make_doc(compiled, ts):
@@ -95,20 +88,49 @@ else:
 
 
 # ---------------------------------------------------------------------------
+# Spike manifest loader
+# ---------------------------------------------------------------------------
+def load_spike_manifest(path):
+    """
+    Load anomaly_spikes.json written by backfill_all-MLv2-WORKSHOP.py.
+    Returns a list of spike dicts, or [] if path is None / unreadable.
+    Each spike: {start_hour, end_hour, types, volume_mult, error_rate, latency_mult}
+    """
+    if not path:
+        return []
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+        spikes = data.get("spikes", [])
+        volume_spikes = [s for s in spikes if "volume" in s.get("types", [])]
+        if volume_spikes:
+            print(f"  ✓ Spike manifest loaded: {len(volume_spikes)} volume spike(s)")
+            for s in volume_spikes:
+                print(f"    hours {s['start_hour']:>4}–{s['end_hour']:<4}  "
+                      f"×{s['volume_mult']:.1f} volume")
+        return spikes
+    except Exception as e:
+        print(f"  ⚠ Could not load spike manifest {path!r}: {e}")
+        return []
+
+
+def spike_at_hour(spikes, hour_offset):
+    """Return the active spike dict for a given absolute hour offset, or None."""
+    for s in spikes:
+        if s["start_hour"] <= hour_offset < s["end_hour"]:
+            return s
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Timezone helpers
 # ---------------------------------------------------------------------------
 def resolve_tz(tz_name):
     if not tz_name:
         tz = _local_tz()
         tz_str = getattr(tz, 'key', getattr(tz, 'zone', str(tz)))
-        # Warn if the resolved timezone is UTC — on most Linux servers the
-        # system timezone is UTC, which means the diurnal peak (1 PM) will be
-        # stored as 13:00 UTC and appear shifted in Kibana if the user's
-        # browser is in a different timezone.
         if "utc" in tz_str.lower() or tz_str in ("UTC", "Etc/UTC", "GMT"):
             print(f"  ⚠  Timezone is UTC (system default).")
-            print(f"     If your Kibana/browser is in a different timezone, the")
-            print(f"     diurnal peak will appear shifted in dashboards.")
             print(f"     Re-run with --timezone 'America/New_York' (or your tz)")
             print(f"     to align the peak with your local business hours.")
             print()
@@ -138,67 +160,91 @@ def tz_name(tz):
 
 
 # ---------------------------------------------------------------------------
-# Timestamp generator with hourly cap
+# Timestamp generator with hourly cap + spike awareness
 # ---------------------------------------------------------------------------
-def timestamps_for_day_capped(day_dt, count, tz, max_hourly):
+def timestamps_for_day_capped(day_dt, count, tz, max_hourly,
+                               spikes=None, day_offset=0):
     """
-    Yield `count` ISO timestamp strings for date `day_dt` in `tz`,
-    distributed by the diurnal profile but capped at max_hourly per hour.
+    Yield (ts_iso, is_spike) tuples for `count` docs on `day_dt`.
+
+    During spike hours the per-hour volume is multiplied by spike.volume_mult
+    and the hourly cap is bypassed. Outside spike hours the normal max_hourly
+    cap applies.
+
+    day_offset: how many days from the backfill start this day is (0-based),
+                used to compute the absolute hour offset for spike lookup.
     """
-    # Build the day start in the user's local timezone
-    day_start_local = datetime(day_dt.year, day_dt.month, day_dt.day,
-                               tzinfo=tz)
-    # Convert to UTC for storage
-    day_start_utc = day_start_local.astimezone(timezone.utc)
+    spikes = spikes or []
+    day_start_local = datetime(day_dt.year, day_dt.month, day_dt.day, tzinfo=tz)
 
-    weights = hour_weights_for_day(day_dt)
-    total_w = sum(weights)
+    weights  = hour_weights_for_day(day_dt)
+    total_w  = sum(weights)
 
+    # Build per-hour doc counts — applying spike multipliers where active
     hour_counts = []
-    allocated = 0
-    for w in weights:
-        n = round(count * w / total_w) if total_w > 0 else 0
-        n = min(n, max_hourly)           # apply hourly cap
-        hour_counts.append(n)
+    allocated   = 0
+    for hour, w in enumerate(weights):
+        abs_hour = day_offset * 24 + hour
+        spike    = spike_at_hour(spikes, abs_hour)
+        base_n   = round(count * w / total_w) if total_w > 0 else 0
+        if spike and "volume" in spike.get("types", []):
+            n = round(base_n * spike["volume_mult"])
+            # No cap during spikes — parent orchestrator set effective_cap
+        else:
+            n = min(base_n, max_hourly)
+        hour_counts.append((n, spike is not None and "volume" in spike.get("types", [])))
         allocated += n
 
-    # Apply cap adjustment — peak is hour 13
-    hour_counts[13] = min(hour_counts[13] + (count - allocated), max_hourly)
+    # Remainder goes into peak hour (13), capped only outside spike windows
+    remainder = count - allocated
+    abs_peak  = day_offset * 24 + 13
+    peak_spike = spike_at_hour(spikes, abs_peak)
+    if peak_spike and "volume" in peak_spike.get("types", []):
+        hour_counts[13] = (hour_counts[13][0] + remainder, True)
+    else:
+        hour_counts[13] = (min(hour_counts[13][0] + remainder, max_hourly), False)
 
-    for hour, n in enumerate(hour_counts):
+    for hour, (n, is_spike) in enumerate(hour_counts):
         if n <= 0:
             continue
-        # Add hours in LOCAL time then convert to UTC so that hour 13
-        # means 1 PM local, not 1 PM UTC.
         h_start_local = day_start_local + timedelta(hours=hour)
         h_start_utc   = h_start_local.astimezone(timezone.utc)
         for _ in range(n):
             sec = random.uniform(0, 3599)
             ts  = h_start_utc + timedelta(seconds=sec)
-            yield ts.strftime("%Y-%m-%dT%H:%M:%S.") + \
-                  f"{ts.microsecond // 1000:03d}Z"
+            yield (
+                ts.strftime("%Y-%m-%dT%H:%M:%S.") + f"{ts.microsecond // 1000:03d}Z",
+                is_spike,
+            )
 
 
 # ---------------------------------------------------------------------------
 # Worker
 # ---------------------------------------------------------------------------
-def action_gen(index_name, compiled, day_dt, count, tz, max_hourly):
-    for ts in timestamps_for_day_capped(day_dt, count, tz, max_hourly):
+def action_gen(index_name, compiled, day_dt, count, tz, max_hourly,
+               spikes=None, day_offset=0):
+    for ts_iso, _is_spike in timestamps_for_day_capped(
+            day_dt, count, tz, max_hourly, spikes=spikes, day_offset=day_offset):
         yield {"_op_type": "create", "_index": index_name,
-               "_source": make_doc(compiled, ts)}
+               "_source": make_doc(compiled, ts_iso)}
 
 
 def stream_worker(es, index_name, compiled, weekday_target, days,
-                  bulk_size, pb_threads, pb_queue, progress_q, tz, max_hourly):
+                  bulk_size, pb_threads, pb_queue, progress_q, tz, max_hourly,
+                  spikes=None):
     today     = datetime.now(tz).date()
     start_day = today - timedelta(days=days - 1)
     for d in range(days):
         day   = start_day + timedelta(days=d)
+        # Effective daily count — spike hours will exceed per-hour cap but
+        # we still use the base daily count as the baseline; spike multiplier
+        # is applied per-hour inside timestamps_for_day_capped.
         count = max(1, min(round(weekday_target * day_volume_factor(day)),
                            max_hourly * 24))
         try:
             for ok, info in parallel_bulk(
-                es, action_gen(index_name, compiled, day, count, tz, max_hourly),
+                es, action_gen(index_name, compiled, day, count, tz, max_hourly,
+                               spikes=spikes, day_offset=d),
                 thread_count=pb_threads, chunk_size=bulk_size,
                 queue_size=pb_queue, raise_on_error=False,
                 raise_on_exception=False, request_timeout=120,
@@ -213,8 +259,9 @@ def stream_worker(es, index_name, compiled, weekday_target, days,
 # ---------------------------------------------------------------------------
 def backfill(host, user, password, verify_ssl, config_path,
              days, target_per_day, workers, bulk_size,
-             pb_threads, pb_queue, tz, max_hourly):
+             pb_threads, pb_queue, tz, max_hourly, spikes=None):
 
+    spikes = spikes or []
     ssl_opts = {"verify_certs": verify_ssl, "ssl_show_warn": False}
     if not verify_ssl:
         ssl_opts["ssl_assert_fingerprint"] = None
@@ -248,14 +295,17 @@ def backfill(host, user, password, verify_ssl, config_path,
         for d in range(days)
     )
 
+    volume_spikes = [s for s in spikes if "volume" in s.get("types", [])]
     print(f"\n{'='*64}")
     print(f"  LendPath ML Workshop v2 — SDG Historical Backfill")
     print(f"{'='*64}")
     print(f"  Days:              {days}")
     print(f"  Weekday target:    {target_per_day:>12,} docs/day")
-    print(f"  Peak cap:          {max_hourly:>12,} events/hour")
+    print(f"  Peak cap:          {max_hourly:>12,} events/hour"
+          + (" (bypassed during spikes)" if volume_spikes else ""))
     print(f"  ~Total docs:       {total_docs:>12,}")
     print(f"  Streams:           {len(stream_fields)}")
+    print(f"  Volume spikes:     {len(volume_spikes)}")
     print(f"  Timezone:          {tz_name(tz)}")
     print(f"  Window:            {start_day}  →  {today}")
     print(f"\n  Press Ctrl+C to stop.\n")
@@ -309,7 +359,7 @@ def backfill(host, user, password, verify_ssl, config_path,
                 stream_worker(es, idx, compiled_streams[idx],
                               stream_targets[idx], days, bulk_size,
                               pb_threads, pb_queue, progress_q,
-                              tz, max_hourly)
+                              tz, max_hourly, spikes=spikes)
             except KeyboardInterrupt:
                 return
             except Exception as e:
@@ -357,14 +407,17 @@ def main():
     p.add_argument("--config",             default="mortgage-workshop.yml")
     p.add_argument("--timezone",           default=None, metavar="TZ")
     p.add_argument("--max-hourly",         type=int, default=10_000)
+    p.add_argument("--spike-manifest",     default=None, metavar="PATH",
+                   help="Path to anomaly_spikes.json written by the orchestrator")
     args = p.parse_args()
-    tz = resolve_tz(args.timezone)
+    tz     = resolve_tz(args.timezone)
+    spikes = load_spike_manifest(args.spike_manifest)
     backfill(
         args.host, args.user, args.password, not args.no_verify_ssl,
         args.config, args.days, args.target_per_day,
         args.workers, args.bulk_size,
         args.parallel_bulk_threads, args.parallel_bulk_queue,
-        tz, args.max_hourly,
+        tz, args.max_hourly, spikes=spikes,
     )
 
 if __name__ == "__main__":
