@@ -660,14 +660,16 @@ def setup(host, user, password, verify_ssl):
 
     # ── APM error documents  (logs-apm.error-default) ─────────────────────────
     # Errors land in logs-apm.error-default (data_stream.type = "logs").
-    # error.exception.stacktrace.* fields must be explicitly mapped here —
-    # they are absent from the APM built-in template on self-managed clusters
-    # and ES rejects them as "unknown field" without this mapping.
     #
-    # DO NOT map error.grouping_name / error.grouping_key — they are runtime
-    # fields computed by APM Server; indexing into them raises:
-    #   DocumentParsingException: Cannot index data directly into a field
-    #   with a [script] parameter
+    # error.grouping_key / error.grouping_name are mapped as KEYWORD.
+    # On self-managed clusters (non-Cloud) these are regular indexed fields,
+    # NOT scripted/runtime fields. Without them the APM Errors tab cannot
+    # group or display errors at all.
+    #
+    # transaction.sampled MUST be true on error docs — Kibana APM UI only
+    # surfaces errors that are linked to sampled transactions.
+    #
+    # url.* fields are required for the error detail panel to show context.
     put(host, "/_index_template/logs-apm.error-default", {
         "index_patterns": ["logs-apm.error-default*"],
         "data_stream":    {}, "priority": 300,
@@ -682,31 +684,40 @@ def setup(host, user, password, verify_ssl):
                         "name":  {"type": "keyword"},
                     }},
                     "observer": {"properties": {
+                        "hostname":      {"type": "keyword"},
                         "type":          {"type": "keyword"},
                         "version":       {"type": "keyword"},
                         "version_major": {"type": "integer"},
                     }},
-                    "trace":       {"properties": {"id": {"type": "keyword"}}},
-                    "parent":      {"properties": {"id": {"type": "keyword"}}},
-                    "span":        {"properties": {"id": {"type": "keyword"}}},
+                    "trace":  {"properties": {"id": {"type": "keyword"}}},
+                    "parent": {"properties": {"id": {"type": "keyword"}}},
+                    "span":   {"properties": {"id": {"type": "keyword"}}},
                     "transaction": {"properties": {
-                        "id":   {"type": "keyword"},
-                        "name": {"type": "keyword"},
-                        "type": {"type": "keyword"},
+                        "id":      {"type": "keyword"},
+                        "name":    {"type": "keyword"},
+                        "type":    {"type": "keyword"},
+                        "sampled": {"type": "boolean"},
                     }},
                     "http": {"properties": {
                         "request": {"properties": {"method": {"type": "keyword"}}},
                     }},
+                    "url": {"properties": {
+                        "full":     {"type": "keyword"},
+                        "original": {"type": "keyword"},
+                        "path":     {"type": "keyword"},
+                        "domain":   {"type": "keyword"},
+                        "scheme":   {"type": "keyword"},
+                        "query":    {"type": "keyword"},
+                    }},
                     "error": {"properties": {
-                        "id":      {"type": "keyword"},
-                        "culprit": {"type": "keyword"},
+                        "id":            {"type": "keyword"},
+                        "culprit":       {"type": "keyword"},
+                        "grouping_key":  {"type": "keyword"},
+                        "grouping_name": {"type": "keyword"},
                         "exception": {"properties": {
                             "type":    {"type": "keyword"},
-                            "code":    {"type": "keyword"},
                             "message": {"type": "text"},
-                            # Explicitly mapped — previously caused "unknown field"
-                            # errors because these were absent from the default
-                            # APM template on self-managed clusters.
+                            "handled": {"type": "boolean"},
                             "stacktrace": {"properties": {
                                 "filename":              {"type": "keyword"},
                                 "function":              {"type": "keyword"},
