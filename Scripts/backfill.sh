@@ -1,0 +1,1 @@
+python3  /workspace/workshop/Machine-Learning-Workshop/backfill_all-MLv2-WORKSHOP.py --host http://kubernetes-vm:30920 --user sdg --password changeme --days 30 --no-verify-ssl --sdg-bulk 7500  --apm-bulk 2500 --no-then-run --timezone "UTC"
