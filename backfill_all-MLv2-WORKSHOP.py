@@ -314,7 +314,11 @@ def run_backfill(host, user, password, verify_ssl,
                  job_files=None,
                  # ── spike params ──
                  spikes=None,
-                 spike_cap_override=True):
+                 spike_cap_override=True,
+                 # ── post-backfill ML control ──
+                 skip_ml=False,
+                 skip_ad=False,
+                 skip_dfa=False):
 
     spikes = spikes or []
     run_script = os.path.join(_HERE, "run_workshop.py")
@@ -478,31 +482,44 @@ def run_backfill(host, user, password, verify_ssl,
         print(f"  Post-Backfill Automation")
         print(f"{'='*68}")
         print(f"  Bootstrap: {os.path.basename(bs)}")
+        if skip_ml:
+            print(f"  ML jobs:   skipped (--skip-ml)")
+        elif skip_ad and skip_dfa:
+            print(f"  ML jobs:   skipped (--skip-ad + --skip-dfa)")
         print()
 
-        print("▸ Step 1/3 — Starting AD datafeeds…")
-        try:
-            result = subprocess.run(
-                [PYTHON, bs] + bs_common + ["--skip-kibana"], cwd=_HERE)
-            if result.returncode == 0:
-                print("  ✓ AD datafeeds started")
-            else:
-                print(f"  ⚠ AD datafeed start returned exit code {result.returncode}")
-        except Exception as e:
-            print(f"  ⚠ Could not start AD datafeeds: {e}")
+        # ── Step 1: AD jobs + datafeeds ───────────────────────────────────────
+        if skip_ml or skip_ad:
+            print("▸ Step 1/3 — AD datafeeds skipped (--skip-ml / --skip-ad)")
+        else:
+            print("▸ Step 1/3 — Starting AD datafeeds…")
+            try:
+                result = subprocess.run(
+                    [PYTHON, bs] + bs_common + ["--skip-kibana"],
+                    cwd=_HERE)
+                if result.returncode == 0:
+                    print("  ✓ AD datafeeds started")
+                else:
+                    print(f"  ⚠ AD datafeed start returned exit code {result.returncode}")
+            except Exception as e:
+                print(f"  ⚠ Could not start AD datafeeds: {e}")
 
+        # ── Step 2: DFA jobs ──────────────────────────────────────────────────
         print()
-        print("▸ Step 2/3 — Creating and starting DFA jobs…")
-        try:
-            result = subprocess.run(
-                [PYTHON, bs] + bs_common + ["--create-dfa", "--skip-kibana"],
-                cwd=_HERE)
-            if result.returncode == 0:
-                print("  ✓ DFA jobs created and started")
-            else:
-                print(f"  ⚠ DFA job creation returned exit code {result.returncode}")
-        except Exception as e:
-            print(f"  ⚠ Could not create DFA jobs: {e}")
+        if skip_ml or skip_dfa:
+            print("▸ Step 2/3 — DFA jobs skipped (--skip-ml / --skip-dfa)")
+        else:
+            print("▸ Step 2/3 — Creating and starting DFA jobs…")
+            try:
+                result = subprocess.run(
+                    [PYTHON, bs] + bs_common + ["--create-dfa", "--skip-kibana"],
+                    cwd=_HERE)
+                if result.returncode == 0:
+                    print("  ✓ DFA jobs created and started")
+                else:
+                    print(f"  ⚠ DFA job creation returned exit code {result.returncode}")
+            except Exception as e:
+                print(f"  ⚠ Could not create DFA jobs: {e}")
 
         print(f"\n{'='*68}\n")
     else:
@@ -607,6 +624,19 @@ Examples:
     p.add_argument("--then-run",      action="store_true", default=True)
     p.add_argument("--no-then-run",   action="store_false", dest="then_run")
 
+    # ── Post-backfill ML control ───────────────────────────────────────────────
+    ml_ctrl = p.add_argument_group(
+        "post-backfill ML control",
+        "Control which ML resources bootstrap creates after backfill completes."
+    )
+    ml_ctrl.add_argument("--skip-ml",  action="store_true", default=False,
+                         help="Skip all ML job creation after backfill "
+                              "(equivalent to --skip-ad + --skip-dfa)")
+    ml_ctrl.add_argument("--skip-ad",  action="store_true", default=False,
+                         help="Skip AD job + datafeed creation/start after backfill")
+    ml_ctrl.add_argument("--skip-dfa", action="store_true", default=False,
+                         help="Skip DFA job creation after backfill")
+
     # ── Anomaly spike flags ────────────────────────────────────────────────────
     spike = p.add_argument_group(
         "anomaly spikes",
@@ -704,6 +734,9 @@ Examples:
         job_files=args.job_files,
         spikes=spikes,
         spike_cap_override=args.spike_cap_override,
+        skip_ml=args.skip_ml,
+        skip_ad=args.skip_ad,
+        skip_dfa=args.skip_dfa,
     )
 
 
