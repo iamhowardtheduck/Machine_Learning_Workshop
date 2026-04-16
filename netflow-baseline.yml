@@ -1,0 +1,337 @@
+# netflow-baseline.yml
+# SDG configuration for NetFlow baseline demonstration.
+# Generates ECS-compliant NetFlow flow records in logs-netflow.log-baseline
+# to demonstrate ML baselining, anomaly detection, and change point detection.
+#
+# Traffic profile:
+#   Workdays:    ramp from 06:00, peak at 12:00-13:00 (lunch), taper by 20:00
+#   Weekends:    ~25% of weekday volume, steady low throughout
+#   Overnight:   minimal traffic 22:00-05:00 (~3% of peak)
+#   Spike week:  ONE weekend 3-4 weeks into the backfill window gets 4× normal
+#                weekend volume to seed the outlier for ML baselining demos
+
+workloads:
+  - indexName: "logs-netflow.log-baseline"
+    description: "NetFlow v9 flow records — LendPath corporate network"
+    fields:
+
+      # ── ECS base ─────────────────────────────────────────────────────────
+      - name: "@timestamp"
+        type: timestamp
+
+      - name: "ecs.version"
+        type: value
+        value: "8.11.0"
+
+      # ── Event classification ──────────────────────────────────────────────
+      - name: "event.kind"
+        type: value
+        value: "event"
+
+      - name: "event.category"
+        type: value
+        value: "network"
+
+      - name: "event.type"
+        type: array
+        values:
+          - "connection"
+          - "end"
+
+      - name: "event.action"
+        type: value
+        value: "netflow_flow"
+
+      - name: "event.dataset"
+        type: value
+        value: "netflow.log"
+
+      - name: "event.module"
+        type: value
+        value: "netflow"
+
+      - name: "event.duration"
+        type: long_range
+        min: 1000000
+        max: 300000000000
+
+      - name: "event.start"
+        type: timestamp
+
+      - name: "event.end"
+        type: timestamp
+
+      - name: "event.original"
+        type: value
+        value: "netflow_flow"
+
+      # ── Data stream ───────────────────────────────────────────────────────
+      - name: "data_stream.type"
+        type: value
+        value: "logs"
+
+      - name: "data_stream.dataset"
+        type: value
+        value: "netflow.log"
+
+      - name: "data_stream.namespace"
+        type: value
+        value: "baseline"
+
+      # ── Source ────────────────────────────────────────────────────────────
+      - name: "source.ip"
+        type: ip
+        cidr: "10.10.0.0/16"
+
+      - name: "source.port"
+        type: int_range
+        min: 1024
+        max: 65535
+
+      - name: "source.bytes"
+        type: long_range
+        min: 64
+        max: 1500000
+
+      - name: "source.packets"
+        type: long_range
+        min: 1
+        max: 10000
+
+      - name: "source.locality"
+        type: value
+        value: "internal"
+
+      # ── Destination ───────────────────────────────────────────────────────
+      - name: "destination.ip"
+        type: weighted_array
+        values:
+          - value: "10.20.0.0/16"
+            weight: 40
+          - value: "10.30.0.0/16"
+            weight: 30
+          - value: "172.16.0.0/12"
+            weight: 15
+          - value: "203.0.113.0/24"
+            weight: 10
+          - value: "198.51.100.0/24"
+            weight: 5
+
+      - name: "destination.port"
+        type: weighted_array
+        values:
+          - value: 443
+            weight: 45
+          - value: 80
+            weight: 20
+          - value: 8443
+            weight: 10
+          - value: 22
+            weight: 8
+          - value: 3306
+            weight: 6
+          - value: 5432
+            weight: 5
+          - value: 1521
+            weight: 4
+          - value: 25
+            weight: 2
+
+      - name: "destination.bytes"
+        type: long_range
+        min: 64
+        max: 5000000
+
+      - name: "destination.packets"
+        type: long_range
+        min: 1
+        max: 15000
+
+      - name: "destination.locality"
+        type: weighted_array
+        values:
+          - value: "internal"
+            weight: 60
+          - value: "external"
+            weight: 40
+
+      # ── Network ───────────────────────────────────────────────────────────
+      - name: "network.transport"
+        type: weighted_array
+        values:
+          - value: "tcp"
+            weight: 75
+          - value: "udp"
+            weight: 20
+          - value: "icmp"
+            weight: 5
+
+      - name: "network.type"
+        type: value
+        value: "ipv4"
+
+      - name: "network.iana_number"
+        type: weighted_array
+        values:
+          - value: 6
+            weight: 75
+          - value: 17
+            weight: 20
+          - value: 1
+            weight: 5
+
+      - name: "network.bytes"
+        type: long_range
+        min: 128
+        max: 6500000
+
+      - name: "network.packets"
+        type: long_range
+        min: 2
+        max: 25000
+
+      - name: "network.direction"
+        type: weighted_array
+        values:
+          - value: "inbound"
+            weight: 35
+          - value: "outbound"
+            weight: 45
+          - value: "internal"
+            weight: 20
+
+      - name: "network.community_id"
+        type: uuid
+
+      - name: "network.protocol"
+        type: weighted_array
+        values:
+          - value: "https"
+            weight: 45
+          - value: "http"
+            weight: 20
+          - value: "ssh"
+            weight: 8
+          - value: "mysql"
+            weight: 6
+          - value: "postgresql"
+            weight: 5
+          - value: "oracle"
+            weight: 4
+          - value: "smtp"
+            weight: 2
+          - value: "dns"
+            weight: 10
+
+      # ── Observer (router/switch exporting NetFlow) ────────────────────────
+      - name: "observer.type"
+        type: value
+        value: "router"
+
+      - name: "observer.name"
+        type: weighted_array
+        values:
+          - value: "core-router-01"
+            weight: 35
+          - value: "core-router-02"
+            weight: 35
+          - value: "edge-router-01"
+            weight: 20
+          - value: "datacenter-sw-01"
+            weight: 10
+
+      - name: "observer.ip"
+        type: weighted_array
+        values:
+          - value: "10.0.0.1"
+            weight: 35
+          - value: "10.0.0.2"
+            weight: 35
+          - value: "10.0.0.3"
+            weight: 20
+          - value: "10.0.0.10"
+            weight: 10
+
+      # ── Flow metadata (NetFlow-specific) ──────────────────────────────────
+      - name: "netflow.type"
+        type: value
+        value: "netflow_flow"
+
+      - name: "netflow.exporter.address"
+        type: weighted_array
+        values:
+          - value: "10.0.0.1:2055"
+            weight: 35
+          - value: "10.0.0.2:2055"
+            weight: 35
+          - value: "10.0.0.3:2055"
+            weight: 20
+          - value: "10.0.0.10:2055"
+            weight: 10
+
+      - name: "netflow.exporter.version"
+        type: value
+        value: 9
+
+      - name: "netflow.exporter.uptime_millis"
+        type: long_range
+        min: 86400000
+        max: 2592000000
+
+      - name: "netflow.flow_id"
+        type: long_range
+        min: 1000000
+        max: 9999999
+
+      - name: "netflow.input.ifindex"
+        type: int_range
+        min: 1
+        max: 48
+
+      - name: "netflow.output.ifindex"
+        type: int_range
+        min: 1
+        max: 48
+
+      - name: "netflow.ip_class_of_service"
+        type: int_range
+        min: 0
+        max: 48
+
+      - name: "netflow.tcp_control_bits"
+        type: weighted_array
+        values:
+          - value: 24
+            weight: 50
+          - value: 16
+            weight: 20
+          - value: 2
+            weight: 15
+          - value: 4
+            weight: 15
+
+      # ── Related ───────────────────────────────────────────────────────────
+      - name: "related.ip"
+        type: ip
+        cidr: "10.10.0.0/16"
+
+      # ── Tags ──────────────────────────────────────────────────────────────
+      - name: "tags"
+        type: array
+        values:
+          - "netflow"
+          - "baseline"
+          - "lendpath-network"
+
+      # ── Agent ─────────────────────────────────────────────────────────────
+      - name: "agent.type"
+        type: value
+        value: "filebeat"
+
+      - name: "agent.name"
+        type: value
+        value: "netflow-collector-01"
+
+      - name: "agent.version"
+        type: value
+        value: "8.14.0"

@@ -1,0 +1,1328 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v5.json",
+  "description": "LendPath Service Topology \u2014 transaction volume, error rates, span connections",
+  "width": 1024,
+  "height": 768,
+  "padding": 24,
+  "autosize": "none",
+  "background": "#0d1117",
+  "signals": [
+    {
+      "name": "nodeRadius",
+      "value": 38
+    },
+    {
+      "name": "selectedNode",
+      "value": null,
+      "on": [
+        {
+          "events": "symbol:click",
+          "update": "datum.id"
+        },
+        {
+          "events": "view:click[!event.item]",
+          "update": "null"
+        }
+      ]
+    }
+  ],
+  "data": [
+    {
+      "name": "node-defs",
+      "values": [
+        {
+          "id": "lendpath-los",
+          "label": "lendpath-los",
+          "group": "app",
+          "x": 480,
+          "y": 90,
+          "color": "#38bdf8"
+        },
+        {
+          "id": "lendpath-underwriting",
+          "label": "lendpath-\nunderwriting",
+          "group": "app",
+          "x": 180,
+          "y": 270,
+          "color": "#38bdf8"
+        },
+        {
+          "id": "lendpath-credit-service",
+          "label": "lendpath-\ncredit-service",
+          "group": "app",
+          "x": 480,
+          "y": 270,
+          "color": "#38bdf8"
+        },
+        {
+          "id": "lendpath-document-service",
+          "label": "lendpath-\ndocument-svc",
+          "group": "app",
+          "x": 780,
+          "y": 270,
+          "color": "#38bdf8"
+        },
+        {
+          "id": "lendpath-appraisal-service",
+          "label": "lendpath-\nappraisal-svc",
+          "group": "app",
+          "x": 930,
+          "y": 430,
+          "color": "#38bdf8"
+        },
+        {
+          "id": "Oracle DB:1521",
+          "label": "Oracle DB\n:1521",
+          "group": "db",
+          "x": 180,
+          "y": 460,
+          "color": "#f97316"
+        },
+        {
+          "id": "Kafka:9092",
+          "label": "Kafka\n:9092",
+          "group": "msg",
+          "x": 60,
+          "y": 570,
+          "color": "#a78bfa"
+        },
+        {
+          "id": "Redis:6379",
+          "label": "Redis\n:6379",
+          "group": "cache",
+          "x": 480,
+          "y": 570,
+          "color": "#f43f5e"
+        },
+        {
+          "id": "AWS S3:443",
+          "label": "AWS S3\n:443",
+          "group": "storage",
+          "x": 780,
+          "y": 460,
+          "color": "#fb923c"
+        },
+        {
+          "id": "Experian API:443",
+          "label": "Experian\n:443",
+          "group": "external",
+          "x": 340,
+          "y": 570,
+          "color": "#34d399"
+        },
+        {
+          "id": "Equifax API:443",
+          "label": "Equifax\n:443",
+          "group": "external",
+          "x": 620,
+          "y": 570,
+          "color": "#34d399"
+        },
+        {
+          "id": "CoreLogic API:443",
+          "label": "CoreLogic\n:443",
+          "group": "external",
+          "x": 930,
+          "y": 570,
+          "color": "#34d399"
+        }
+      ]
+    },
+    {
+      "name": "edge-defs",
+      "values": [
+        {
+          "source": "lendpath-los",
+          "target": "lendpath-underwriting",
+          "edgeKey": "lendpath-los|lendpath-underwriting"
+        },
+        {
+          "source": "lendpath-los",
+          "target": "lendpath-credit-service",
+          "edgeKey": "lendpath-los|lendpath-credit-service"
+        },
+        {
+          "source": "lendpath-los",
+          "target": "lendpath-document-service",
+          "edgeKey": "lendpath-los|lendpath-document-service"
+        },
+        {
+          "source": "lendpath-los",
+          "target": "lendpath-appraisal-service",
+          "edgeKey": "lendpath-los|lendpath-appraisal-service"
+        },
+        {
+          "source": "lendpath-los",
+          "target": "Oracle DB:1521",
+          "edgeKey": "lendpath-los|Oracle DB:1521"
+        },
+        {
+          "source": "lendpath-los",
+          "target": "Redis:6379",
+          "edgeKey": "lendpath-los|Redis:6379"
+        },
+        {
+          "source": "lendpath-underwriting",
+          "target": "Oracle DB:1521",
+          "edgeKey": "lendpath-underwriting|Oracle DB:1521"
+        },
+        {
+          "source": "lendpath-underwriting",
+          "target": "Kafka:9092",
+          "edgeKey": "lendpath-underwriting|Kafka:9092"
+        },
+        {
+          "source": "lendpath-underwriting",
+          "target": "Redis:6379",
+          "edgeKey": "lendpath-underwriting|Redis:6379"
+        },
+        {
+          "source": "lendpath-credit-service",
+          "target": "Oracle DB:1521",
+          "edgeKey": "lendpath-credit-service|Oracle DB:1521"
+        },
+        {
+          "source": "lendpath-credit-service",
+          "target": "Experian API:443",
+          "edgeKey": "lendpath-credit-service|Experian API:443"
+        },
+        {
+          "source": "lendpath-credit-service",
+          "target": "Equifax API:443",
+          "edgeKey": "lendpath-credit-service|Equifax API:443"
+        },
+        {
+          "source": "lendpath-credit-service",
+          "target": "Redis:6379",
+          "edgeKey": "lendpath-credit-service|Redis:6379"
+        },
+        {
+          "source": "lendpath-document-service",
+          "target": "Oracle DB:1521",
+          "edgeKey": "lendpath-document-service|Oracle DB:1521"
+        },
+        {
+          "source": "lendpath-document-service",
+          "target": "AWS S3:443",
+          "edgeKey": "lendpath-document-service|AWS S3:443"
+        },
+        {
+          "source": "lendpath-appraisal-service",
+          "target": "Oracle DB:1521",
+          "edgeKey": "lendpath-appraisal-service|Oracle DB:1521"
+        },
+        {
+          "source": "lendpath-appraisal-service",
+          "target": "CoreLogic API:443",
+          "edgeKey": "lendpath-appraisal-service|CoreLogic API:443"
+        },
+        {
+          "source": "lendpath-appraisal-service",
+          "target": "Redis:6379",
+          "edgeKey": "lendpath-appraisal-service|Redis:6379"
+        }
+      ]
+    },
+    {
+      "name": "service-stats",
+      "url": {
+        "index": "traces-apm-default",
+        "body": {
+          "size": 0,
+          "query": {
+            "bool": {
+              "filter": [
+                {
+                  "term": {
+                    "processor.event": "transaction"
+                  }
+                },
+                {
+                  "range": {
+                    "@timestamp": {
+                      "gte": "now-24h"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "aggs": {
+            "by_service": {
+              "terms": {
+                "field": "service.name",
+                "size": 20
+              },
+              "aggs": {
+                "errors": {
+                  "filter": {
+                    "term": {
+                      "event.outcome": "failure"
+                    }
+                  },
+                  "aggs": {
+                    "count": {
+                      "value_count": {
+                        "field": "transaction.id"
+                      }
+                    }
+                  }
+                },
+                "avg_dur": {
+                  "avg": {
+                    "field": "transaction.duration.us"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "format": {
+        "property": "aggregations.by_service.buckets"
+      },
+      "transform": [
+        {
+          "type": "formula",
+          "as": "serviceId",
+          "expr": "datum.key"
+        },
+        {
+          "type": "formula",
+          "as": "txnCount",
+          "expr": "datum.doc_count"
+        },
+        {
+          "type": "formula",
+          "as": "errorCount",
+          "expr": "datum.errors.count.value"
+        },
+        {
+          "type": "formula",
+          "as": "errorRate",
+          "expr": "datum.doc_count > 0 ? datum.errors.count.value / datum.doc_count : 0"
+        },
+        {
+          "type": "formula",
+          "as": "avgDurMs",
+          "expr": "datum.avg_dur.value ? round(datum.avg_dur.value / 1000) : 0"
+        }
+      ]
+    },
+    {
+      "name": "span-stats-raw",
+      "url": {
+        "index": "traces-apm-default",
+        "body": {
+          "size": 0,
+          "query": {
+            "bool": {
+              "filter": [
+                {
+                  "term": {
+                    "processor.event": "span"
+                  }
+                },
+                {
+                  "exists": {
+                    "field": "span.destination.service.resource"
+                  }
+                },
+                {
+                  "range": {
+                    "@timestamp": {
+                      "gte": "now-24h"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "aggs": {
+            "by_caller": {
+              "terms": {
+                "field": "service.name",
+                "size": 20
+              },
+              "aggs": {
+                "by_dest": {
+                  "terms": {
+                    "field": "span.destination.service.resource",
+                    "size": 30
+                  },
+                  "aggs": {
+                    "span_errors": {
+                      "filter": {
+                        "term": {
+                          "event.outcome": "failure"
+                        }
+                      },
+                      "aggs": {
+                        "count": {
+                          "value_count": {
+                            "field": "span.id"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "format": {
+        "property": "aggregations.by_caller.buckets"
+      },
+      "transform": [
+        {
+          "type": "flatten",
+          "fields": [
+            "by_dest.buckets"
+          ],
+          "as": [
+            "dest_bucket"
+          ]
+        },
+        {
+          "type": "formula",
+          "as": "caller",
+          "expr": "datum.key"
+        },
+        {
+          "type": "formula",
+          "as": "destResource",
+          "expr": "datum.dest_bucket.key"
+        },
+        {
+          "type": "formula",
+          "as": "spanCount",
+          "expr": "datum.dest_bucket.doc_count"
+        },
+        {
+          "type": "formula",
+          "as": "spanErrors",
+          "expr": "datum.dest_bucket.span_errors.count.value"
+        },
+        {
+          "type": "formula",
+          "as": "spanErrorRate",
+          "expr": "datum.dest_bucket.doc_count > 0 ? datum.dest_bucket.span_errors.count.value / datum.dest_bucket.doc_count : 0"
+        },
+        {
+          "type": "formula",
+          "as": "edgeKey",
+          "expr": "datum.caller + '|' + datum.destResource"
+        }
+      ]
+    },
+    {
+      "name": "nodes-display",
+      "source": "node-defs",
+      "transform": [
+        {
+          "type": "lookup",
+          "from": "service-stats",
+          "key": "serviceId",
+          "fields": [
+            "id"
+          ],
+          "as": [
+            "stats"
+          ],
+          "default": {
+            "txnCount": 0,
+            "errorRate": 0,
+            "avgDurMs": 0
+          }
+        },
+        {
+          "type": "formula",
+          "as": "txnCount",
+          "expr": "datum.stats ? datum.stats.txnCount : 0"
+        },
+        {
+          "type": "formula",
+          "as": "errorRate",
+          "expr": "datum.stats ? datum.stats.errorRate : 0"
+        },
+        {
+          "type": "formula",
+          "as": "avgDurMs",
+          "expr": "datum.stats ? datum.stats.avgDurMs : 0"
+        },
+        {
+          "type": "formula",
+          "as": "hasData",
+          "expr": "datum.txnCount > 0"
+        },
+        {
+          "type": "formula",
+          "as": "nodeColor",
+          "expr": "datum.group != 'app' ? datum.color : (datum.errorRate > 0.15 ? '#ef4444' : datum.errorRate > 0.05 ? '#f59e0b' : datum.hasData ? '#22c55e' : datum.color)"
+        },
+        {
+          "type": "formula",
+          "as": "nodeSize",
+          "expr": "pow(nodeRadius * 2 + (datum.hasData ? clamp(datum.txnCount / 30, 0, 14) : 0), 2)"
+        },
+        {
+          "type": "formula",
+          "as": "highlighted",
+          "expr": "selectedNode != null && datum.id == selectedNode"
+        },
+        {
+          "type": "formula",
+          "as": "opacity",
+          "expr": "selectedNode == null ? 1 : (datum.id == selectedNode ? 1 : 0.2)"
+        },
+        {
+          "type": "formula",
+          "as": "tooltip",
+          "expr": "datum.hasData ? (datum.id + ' | txn: ' + datum.txnCount + ' | err: ' + format(datum.errorRate, '.0%') + ' | avg: ' + datum.avgDurMs + 'ms') : datum.id"
+        }
+      ]
+    },
+    {
+      "name": "edges-with-coords",
+      "source": "edge-defs",
+      "transform": [
+        {
+          "type": "lookup",
+          "from": "node-defs",
+          "key": "id",
+          "fields": [
+            "source"
+          ],
+          "as": [
+            "src_node"
+          ]
+        },
+        {
+          "type": "lookup",
+          "from": "node-defs",
+          "key": "id",
+          "fields": [
+            "target"
+          ],
+          "as": [
+            "tgt_node"
+          ]
+        },
+        {
+          "type": "lookup",
+          "from": "span-stats-raw",
+          "key": "edgeKey",
+          "fields": [
+            "edgeKey"
+          ],
+          "as": [
+            "edgeStats"
+          ],
+          "default": {
+            "spanCount": 0,
+            "spanErrorRate": 0
+          }
+        },
+        {
+          "type": "formula",
+          "as": "x1",
+          "expr": "datum.src_node.x"
+        },
+        {
+          "type": "formula",
+          "as": "y1",
+          "expr": "datum.src_node.y"
+        },
+        {
+          "type": "formula",
+          "as": "x2",
+          "expr": "datum.tgt_node.x"
+        },
+        {
+          "type": "formula",
+          "as": "y2",
+          "expr": "datum.tgt_node.y"
+        },
+        {
+          "type": "formula",
+          "as": "mx",
+          "expr": "(datum.x1 + datum.x2) / 2"
+        },
+        {
+          "type": "formula",
+          "as": "my",
+          "expr": "(datum.y1 + datum.y2) / 2"
+        },
+        {
+          "type": "formula",
+          "as": "spanCount",
+          "expr": "datum.edgeStats ? datum.edgeStats.spanCount : 0"
+        },
+        {
+          "type": "formula",
+          "as": "spanErrorRate",
+          "expr": "datum.edgeStats ? datum.edgeStats.spanErrorRate : 0"
+        },
+        {
+          "type": "formula",
+          "as": "edgeWidth",
+          "expr": "datum.spanCount > 0 ? clamp(1.5 + datum.spanCount / 60, 1.5, 7) : 1"
+        },
+        {
+          "type": "formula",
+          "as": "edgeColor",
+          "expr": "datum.spanErrorRate > 0.15 ? '#ef4444' : datum.spanErrorRate > 0.05 ? '#f59e0b' : datum.spanCount > 0 ? '#22c55e' : '#1e3a5f'"
+        },
+        {
+          "type": "formula",
+          "as": "highlighted",
+          "expr": "selectedNode != null && (datum.source == selectedNode || datum.target == selectedNode)"
+        }
+      ]
+    }
+  ],
+  "marks": [
+    {
+      "type": "text",
+      "encode": {
+        "enter": {
+          "x": {
+            "value": 480
+          },
+          "y": {
+            "value": 22
+          },
+          "align": {
+            "value": "center"
+          },
+          "baseline": {
+            "value": "middle"
+          },
+          "text": {
+            "value": "LendPath \u2014 Service Topology"
+          },
+          "font": {
+            "value": "ui-monospace, monospace"
+          },
+          "fontSize": {
+            "value": 14
+          },
+          "fontWeight": {
+            "value": "bold"
+          },
+          "fill": {
+            "value": "#94a3b8"
+          },
+          "letterSpacing": {
+            "value": 2
+          }
+        }
+      }
+    },
+    {
+      "name": "edges",
+      "type": "rule",
+      "from": {
+        "data": "edges-with-coords"
+      },
+      "encode": {
+        "update": {
+          "x": {
+            "field": "x1"
+          },
+          "y": {
+            "field": "y1"
+          },
+          "x2": {
+            "field": "x2"
+          },
+          "y2": {
+            "field": "y2"
+          },
+          "stroke": [
+            {
+              "test": "datum.highlighted || selectedNode == null",
+              "field": "edgeColor"
+            },
+            {
+              "value": "#0f2744"
+            }
+          ],
+          "strokeWidth": [
+            {
+              "test": "datum.highlighted || selectedNode == null",
+              "field": "edgeWidth"
+            },
+            {
+              "value": 0.5
+            }
+          ],
+          "strokeOpacity": [
+            {
+              "test": "selectedNode == null",
+              "value": 0.6
+            },
+            {
+              "test": "datum.highlighted",
+              "value": 1
+            },
+            {
+              "value": 0.08
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "arrows",
+      "type": "symbol",
+      "from": {
+        "data": "edges-with-coords"
+      },
+      "encode": {
+        "update": {
+          "x": {
+            "field": "x2"
+          },
+          "y": {
+            "field": "y2"
+          },
+          "shape": {
+            "value": "triangle"
+          },
+          "angle": {
+            "signal": "atan2(datum.y2 - datum.y1, datum.x2 - datum.x1) * 180 / PI + 90"
+          },
+          "size": {
+            "value": 60
+          },
+          "fill": [
+            {
+              "test": "datum.highlighted || selectedNode == null",
+              "field": "edgeColor"
+            },
+            {
+              "value": "#0f2744"
+            }
+          ],
+          "fillOpacity": [
+            {
+              "test": "selectedNode == null",
+              "value": 0.6
+            },
+            {
+              "test": "datum.highlighted",
+              "value": 1
+            },
+            {
+              "value": 0.08
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "edge-counts",
+      "type": "text",
+      "from": {
+        "data": "edges-with-coords"
+      },
+      "encode": {
+        "update": {
+          "x": {
+            "field": "mx"
+          },
+          "y": {
+            "field": "my"
+          },
+          "text": {
+            "signal": "datum.spanCount > 0 ? format(datum.spanCount, ',') : ''"
+          },
+          "align": {
+            "value": "center"
+          },
+          "baseline": {
+            "value": "middle"
+          },
+          "font": {
+            "value": "ui-monospace, monospace"
+          },
+          "fontSize": {
+            "value": 8
+          },
+          "fill": {
+            "field": "edgeColor"
+          },
+          "fillOpacity": [
+            {
+              "test": "selectedNode == null",
+              "value": 0.7
+            },
+            {
+              "test": "datum.highlighted",
+              "value": 1
+            },
+            {
+              "value": 0
+            }
+          ],
+          "dx": {
+            "value": 7
+          }
+        }
+      }
+    },
+    {
+      "name": "node-glow",
+      "type": "symbol",
+      "from": {
+        "data": "nodes-display"
+      },
+      "encode": {
+        "update": {
+          "x": {
+            "field": "x"
+          },
+          "y": {
+            "field": "y"
+          },
+          "shape": {
+            "value": "circle"
+          },
+          "size": {
+            "signal": "pow(nodeRadius * 2 + 12, 2)"
+          },
+          "fill": {
+            "field": "nodeColor"
+          },
+          "fillOpacity": [
+            {
+              "test": "datum.hasData",
+              "value": 0.08
+            },
+            {
+              "value": 0.03
+            }
+          ],
+          "strokeOpacity": {
+            "value": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "node-circles",
+      "type": "symbol",
+      "from": {
+        "data": "nodes-display"
+      },
+      "encode": {
+        "enter": {
+          "cursor": {
+            "value": "pointer"
+          }
+        },
+        "update": {
+          "x": {
+            "field": "x"
+          },
+          "y": {
+            "field": "y"
+          },
+          "shape": {
+            "value": "circle"
+          },
+          "size": {
+            "field": "nodeSize"
+          },
+          "fill": [
+            {
+              "test": "datum.highlighted",
+              "value": "#1e3a5f"
+            },
+            {
+              "test": "datum.hasData && datum.group == 'app'",
+              "signal": "datum.nodeColor + '18'"
+            },
+            {
+              "value": "#0d1117"
+            }
+          ],
+          "stroke": {
+            "field": "nodeColor"
+          },
+          "strokeWidth": [
+            {
+              "test": "datum.highlighted",
+              "value": 2.5
+            },
+            {
+              "test": "datum.hasData",
+              "value": 1.8
+            },
+            {
+              "value": 1
+            }
+          ],
+          "fillOpacity": {
+            "field": "opacity"
+          },
+          "strokeOpacity": {
+            "field": "opacity"
+          },
+          "tooltip": {
+            "field": "tooltip"
+          }
+        }
+      }
+    },
+    {
+      "name": "error-ring",
+      "type": "arc",
+      "from": {
+        "data": "nodes-display"
+      },
+      "encode": {
+        "update": {
+          "x": {
+            "field": "x"
+          },
+          "y": {
+            "field": "y"
+          },
+          "innerRadius": {
+            "signal": "nodeRadius - 3"
+          },
+          "outerRadius": {
+            "signal": "nodeRadius + 3"
+          },
+          "startAngle": {
+            "value": 0
+          },
+          "endAngle": {
+            "signal": "datum.errorRate > 0 ? datum.errorRate * 2 * PI : 0"
+          },
+          "fill": {
+            "value": "#ef4444"
+          },
+          "fillOpacity": [
+            {
+              "test": "datum.errorRate > 0",
+              "value": 0.9
+            },
+            {
+              "value": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "node-count",
+      "type": "text",
+      "from": {
+        "data": "nodes-display"
+      },
+      "encode": {
+        "update": {
+          "x": {
+            "field": "x"
+          },
+          "y": {
+            "field": "y"
+          },
+          "text": {
+            "signal": "datum.hasData ? format(datum.txnCount, ',') : ''"
+          },
+          "align": {
+            "value": "center"
+          },
+          "baseline": {
+            "value": "middle"
+          },
+          "font": {
+            "value": "ui-monospace, monospace"
+          },
+          "fontSize": {
+            "value": 10
+          },
+          "fontWeight": {
+            "value": "bold"
+          },
+          "fill": [
+            {
+              "test": "datum.hasData && datum.group == 'app'",
+              "field": "nodeColor"
+            },
+            {
+              "value": "#475569"
+            }
+          ],
+          "fillOpacity": {
+            "field": "opacity"
+          }
+        }
+      }
+    },
+    {
+      "name": "node-labels",
+      "type": "text",
+      "from": {
+        "data": "nodes-display"
+      },
+      "encode": {
+        "update": {
+          "x": {
+            "field": "x"
+          },
+          "y": {
+            "signal": "datum.y + nodeRadius + 14"
+          },
+          "text": {
+            "field": "label"
+          },
+          "align": {
+            "value": "center"
+          },
+          "baseline": {
+            "value": "top"
+          },
+          "font": {
+            "value": "ui-monospace, monospace"
+          },
+          "fontSize": {
+            "value": 9
+          },
+          "fontWeight": [
+            {
+              "test": "datum.highlighted",
+              "value": "bold"
+            },
+            {
+              "value": "normal"
+            }
+          ],
+          "fill": {
+            "field": "nodeColor"
+          },
+          "fillOpacity": {
+            "field": "opacity"
+          },
+          "lineBreak": {
+            "value": "\n"
+          }
+        }
+      }
+    },
+    {
+      "type": "group",
+      "encode": {
+        "enter": {
+          "x": {
+            "value": 16
+          },
+          "y": {
+            "value": 614
+          }
+        }
+      },
+      "marks": [
+        {
+          "type": "symbol",
+          "encode": {
+            "enter": [
+              {
+                "x": {
+                  "value": 0
+                },
+                "shape": {
+                  "value": "circle"
+                },
+                "size": {
+                  "value": 80
+                },
+                "fill": {
+                  "value": "#22c55e"
+                },
+                "strokeOpacity": {
+                  "value": 0
+                }
+              },
+              {
+                "x": {
+                  "value": 75
+                },
+                "shape": {
+                  "value": "circle"
+                },
+                "size": {
+                  "value": 80
+                },
+                "fill": {
+                  "value": "#f59e0b"
+                },
+                "strokeOpacity": {
+                  "value": 0
+                }
+              },
+              {
+                "x": {
+                  "value": 160
+                },
+                "shape": {
+                  "value": "circle"
+                },
+                "size": {
+                  "value": 80
+                },
+                "fill": {
+                  "value": "#ef4444"
+                },
+                "strokeOpacity": {
+                  "value": 0
+                }
+              },
+              {
+                "x": {
+                  "value": 245
+                },
+                "shape": {
+                  "value": "circle"
+                },
+                "size": {
+                  "value": 80
+                },
+                "fill": {
+                  "value": "#38bdf8"
+                },
+                "strokeOpacity": {
+                  "value": 0
+                }
+              },
+              {
+                "x": {
+                  "value": 420
+                },
+                "shape": {
+                  "value": "square"
+                },
+                "size": {
+                  "value": 60
+                },
+                "fill": {
+                  "value": "#22c55e"
+                },
+                "strokeOpacity": {
+                  "value": 0
+                }
+              },
+              {
+                "x": {
+                  "value": 490
+                },
+                "shape": {
+                  "value": "square"
+                },
+                "size": {
+                  "value": 60
+                },
+                "fill": {
+                  "value": "#f59e0b"
+                },
+                "strokeOpacity": {
+                  "value": 0
+                }
+              },
+              {
+                "x": {
+                  "value": 560
+                },
+                "shape": {
+                  "value": "square"
+                },
+                "size": {
+                  "value": 60
+                },
+                "fill": {
+                  "value": "#ef4444"
+                },
+                "strokeOpacity": {
+                  "value": 0
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "encode": {
+            "enter": [
+              {
+                "x": {
+                  "value": 12
+                },
+                "y": {
+                  "value": 4
+                },
+                "text": {
+                  "value": "healthy"
+                },
+                "font": {
+                  "value": "ui-monospace, monospace"
+                },
+                "fontSize": {
+                  "value": 8
+                },
+                "fill": {
+                  "value": "#22c55e"
+                }
+              },
+              {
+                "x": {
+                  "value": 87
+                },
+                "y": {
+                  "value": 4
+                },
+                "text": {
+                  "value": "warn >5%"
+                },
+                "font": {
+                  "value": "ui-monospace, monospace"
+                },
+                "fontSize": {
+                  "value": 8
+                },
+                "fill": {
+                  "value": "#f59e0b"
+                }
+              },
+              {
+                "x": {
+                  "value": 172
+                },
+                "y": {
+                  "value": 4
+                },
+                "text": {
+                  "value": "err >15%"
+                },
+                "font": {
+                  "value": "ui-monospace, monospace"
+                },
+                "fontSize": {
+                  "value": 8
+                },
+                "fill": {
+                  "value": "#ef4444"
+                }
+              },
+              {
+                "x": {
+                  "value": 257
+                },
+                "y": {
+                  "value": 4
+                },
+                "text": {
+                  "value": "no data"
+                },
+                "font": {
+                  "value": "ui-monospace, monospace"
+                },
+                "fontSize": {
+                  "value": 8
+                },
+                "fill": {
+                  "value": "#38bdf8"
+                }
+              },
+              {
+                "x": {
+                  "value": 400
+                },
+                "y": {
+                  "value": 4
+                },
+                "text": {
+                  "value": "edges:"
+                },
+                "font": {
+                  "value": "ui-monospace, monospace"
+                },
+                "fontSize": {
+                  "value": 8
+                },
+                "fill": {
+                  "value": "#475569"
+                }
+              },
+              {
+                "x": {
+                  "value": 432
+                },
+                "y": {
+                  "value": 4
+                },
+                "text": {
+                  "value": "ok"
+                },
+                "font": {
+                  "value": "ui-monospace, monospace"
+                },
+                "fontSize": {
+                  "value": 8
+                },
+                "fill": {
+                  "value": "#22c55e"
+                }
+              },
+              {
+                "x": {
+                  "value": 502
+                },
+                "y": {
+                  "value": 4
+                },
+                "text": {
+                  "value": "warn"
+                },
+                "font": {
+                  "value": "ui-monospace, monospace"
+                },
+                "fontSize": {
+                  "value": 8
+                },
+                "fill": {
+                  "value": "#f59e0b"
+                }
+              },
+              {
+                "x": {
+                  "value": 572
+                },
+                "y": {
+                  "value": 4
+                },
+                "text": {
+                  "value": "error"
+                },
+                "font": {
+                  "value": "ui-monospace, monospace"
+                },
+                "fontSize": {
+                  "value": 8
+                },
+                "fill": {
+                  "value": "#ef4444"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

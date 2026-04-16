@@ -1,0 +1,973 @@
+{
+  "description": "LendPath Mortgage ML Workshop \u2014 Supplemental ML Job Definitions (New Integrations)",
+  "notes": {
+    "cross_source_jobs": "Several jobs deliberately span multiple integrations. Elasticsearch ML datafeeds support multi-index queries using wildcard patterns or comma-separated indices, enabling a single job to learn from correlated signals across data streams.",
+    "otel_packages": "aws_vpcflow_otel, aws_waf_otel, and kafka_otel are Kibana-assets-only packages. Their data lands in aws.vpcflow, aws.waf, and kafka.* data streams respectively \u2014 these jobs target those underlying streams."
+  },
+  "anomaly_detection_jobs": [
+    {
+      "_comment": "SINGLE SOURCE \u2014 Akamai bot score + user risk (Log Rate + Rare baseline)",
+      "job_id": "mortgage-akamai-bot-threat",
+      "description": "Detects unusual bot scores and user risk levels from Akamai SIEM events hitting the LendPath mortgage portal",
+      "analysis_config": {
+        "bucket_span": "15m",
+        "detectors": [
+          {
+            "detector_description": "high_mean(akamai.siem.bot.score) by url.path",
+            "function": "high_mean",
+            "field_name": "akamai.siem.bot.score",
+            "by_field_name": "url.path"
+          },
+          {
+            "detector_description": "high_mean(akamai.siem.user_risk.score) by source.geo.country_iso_code",
+            "function": "high_mean",
+            "field_name": "akamai.siem.user_risk.score",
+            "by_field_name": "source.geo.country_iso_code"
+          },
+          {
+            "detector_description": "rare by akamai.siem.rule_tags",
+            "function": "rare",
+            "by_field_name": "akamai.siem.rule_tags"
+          },
+          {
+            "detector_description": "high_count by akamai.siem.rule_actions",
+            "function": "high_count",
+            "by_field_name": "akamai.siem.rule_actions"
+          }
+        ],
+        "influencers": [
+          "url.path",
+          "source.geo.country_iso_code",
+          "akamai.siem.rule_tags",
+          "akamai.siem.rule_actions",
+          "source.ip"
+        ]
+      },
+      "data_description": {
+        "time_field": "@timestamp"
+      },
+      "datafeed_config": {
+        "datafeed_id": "datafeed-mortgage-akamai-bot-threat",
+        "indices": [
+          "logs-akamai.siem-mortgage"
+        ],
+        "query": {
+          "match_all": {}
+        }
+      },
+      "analysis_limits": {
+        "model_memory_limit": "30mb"
+      }
+    },
+    {
+      "_comment": "CROSS-SOURCE \u2014 Akamai SIEM + AWS WAF: correlated web attack rare job",
+      "_workshop_module": "Cross-Source Rare: same attack IPs/rule patterns appearing in both Akamai edge and AWS WAF simultaneously",
+      "job_id": "mortgage-edge-waf-correlated-rare",
+      "description": "Cross-source rare detector spanning Akamai SIEM and AWS WAF \u2014 detects attack patterns that evade one layer and are caught by the other, or novel rule IDs appearing in both",
+      "analysis_config": {
+        "bucket_span": "1h",
+        "detectors": [
+          {
+            "detector_description": "rare by rule.id",
+            "function": "rare",
+            "by_field_name": "rule.id"
+          },
+          {
+            "detector_description": "rare by source.ip",
+            "function": "rare",
+            "by_field_name": "source.ip"
+          },
+          {
+            "detector_description": "high_count by event.action partition event.dataset",
+            "function": "high_count",
+            "by_field_name": "event.action",
+            "partition_field_name": "event.dataset"
+          }
+        ],
+        "influencers": [
+          "source.ip",
+          "rule.id",
+          "event.action",
+          "event.dataset",
+          "url.path"
+        ]
+      },
+      "data_description": {
+        "time_field": "@timestamp"
+      },
+      "datafeed_config": {
+        "datafeed_id": "datafeed-mortgage-edge-waf-correlated-rare",
+        "indices": [
+          "logs-akamai.siem-mortgage",
+          "logs-aws.waf-mortgage"
+        ],
+        "query": {
+          "match_all": {}
+        }
+      },
+      "analysis_limits": {
+        "model_memory_limit": "60mb"
+      }
+    },
+    {
+      "_comment": "SINGLE SOURCE \u2014 AWS VPC Flow: network traffic multi-metric",
+      "job_id": "mortgage-vpcflow-network-anomaly",
+      "description": "Multi-metric job on VPC flow logs detecting unusual traffic volumes, REJECT spikes, and anomalous destination port usage on the LendPath VPC",
+      "analysis_config": {
+        "bucket_span": "10m",
+        "detectors": [
+          {
+            "detector_description": "high_sum(network.bytes) by destination.port",
+            "function": "high_sum",
+            "field_name": "network.bytes",
+            "by_field_name": "destination.port"
+          },
+          {
+            "detector_description": "high_count by event.action",
+            "function": "high_count",
+            "by_field_name": "event.action"
+          },
+          {
+            "detector_description": "rare by destination.port",
+            "function": "rare",
+            "by_field_name": "destination.port"
+          },
+          {
+            "detector_description": "rare by source.ip",
+            "function": "rare",
+            "by_field_name": "source.ip"
+          }
+        ],
+        "influencers": [
+          "destination.port",
+          "source.ip",
+          "event.action",
+          "cloud.availability_zone"
+        ]
+      },
+      "data_description": {
+        "time_field": "@timestamp"
+      },
+      "datafeed_config": {
+        "datafeed_id": "datafeed-mortgage-vpcflow-network",
+        "indices": [
+          "logs-aws.vpcflow-mortgage"
+        ],
+        "query": {
+          "match_all": {}
+        }
+      },
+      "analysis_limits": {
+        "model_memory_limit": "60mb"
+      }
+    },
+    {
+      "_comment": "CROSS-SOURCE \u2014 VPC Flow REJECT + CoreDNS NXDOMAIN: combined network threat rare job",
+      "_workshop_module": "Cross-source rare: unusual DNS queries (NXDOMAIN bursts to external domains) correlated with VPC REJECT events suggest C2/exfil activity",
+      "job_id": "mortgage-network-threat-combined",
+      "description": "Cross-source job combining AWS VPC Flow REJECT events and CoreDNS NXDOMAIN responses to detect potential data exfiltration or C2 beaconing from the LendPath Kubernetes cluster",
+      "analysis_config": {
+        "bucket_span": "15m",
+        "detectors": [
+          {
+            "detector_description": "rare by dns.question.name",
+            "function": "rare",
+            "by_field_name": "dns.question.name"
+          },
+          {
+            "detector_description": "high_count by dns.response_code",
+            "function": "high_count",
+            "by_field_name": "dns.response_code"
+          },
+          {
+            "detector_description": "rare by dns.question.type",
+            "function": "rare",
+            "by_field_name": "dns.question.type"
+          },
+          {
+            "detector_description": "high_count by event.action partition event.dataset",
+            "function": "high_count",
+            "by_field_name": "event.action",
+            "partition_field_name": "event.dataset"
+          }
+        ],
+        "influencers": [
+          "dns.question.name",
+          "dns.question.registered_domain",
+          "dns.response_code",
+          "dns.question.type",
+          "source.ip",
+          "event.dataset"
+        ]
+      },
+      "data_description": {
+        "time_field": "@timestamp"
+      },
+      "datafeed_config": {
+        "datafeed_id": "datafeed-mortgage-network-threat-combined",
+        "indices": [
+          "logs-aws.vpcflow-mortgage",
+          "logs-coredns.log-mortgage"
+        ],
+        "query": {
+          "bool": {
+            "should": [
+              {
+                "term": {
+                  "event.action": "REJECT"
+                }
+              },
+              {
+                "terms": {
+                  "dns.response_code": [
+                    "NXDOMAIN",
+                    "SERVFAIL",
+                    "REFUSED"
+                  ]
+                }
+              },
+              {
+                "exists": {
+                  "field": "dns.question.name"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "analysis_limits": {
+        "model_memory_limit": "40mb"
+      }
+    },
+    {
+      "_comment": "SINGLE SOURCE \u2014 HAProxy log: multi-metric split by backend_name",
+      "job_id": "mortgage-haproxy-backend-multi",
+      "description": "Per-backend multi-metric job on HAProxy access logs \u2014 detects latency spikes, connection queue buildup, and error rate anomalies per LendPath microservice backend",
+      "analysis_config": {
+        "bucket_span": "5m",
+        "detectors": [
+          {
+            "detector_description": "high_mean(haproxy.connection_wait_time_ms) by haproxy.backend_name",
+            "function": "high_mean",
+            "field_name": "haproxy.connection_wait_time_ms",
+            "by_field_name": "haproxy.backend_name"
+          },
+          {
+            "detector_description": "high_mean(haproxy.backend_queue) by haproxy.backend_name",
+            "function": "high_mean",
+            "field_name": "haproxy.backend_queue",
+            "by_field_name": "haproxy.backend_name"
+          },
+          {
+            "detector_description": "high_mean(haproxy.total_waiting_time_ms) by haproxy.backend_name",
+            "function": "high_mean",
+            "field_name": "haproxy.total_waiting_time_ms",
+            "by_field_name": "haproxy.backend_name"
+          },
+          {
+            "detector_description": "high_count by http.response.status_code partition haproxy.backend_name",
+            "function": "high_count",
+            "by_field_name": "http.response.status_code",
+            "partition_field_name": "haproxy.backend_name"
+          }
+        ],
+        "influencers": [
+          "haproxy.backend_name",
+          "haproxy.server_name",
+          "http.response.status_code"
+        ]
+      },
+      "data_description": {
+        "time_field": "@timestamp"
+      },
+      "datafeed_config": {
+        "datafeed_id": "datafeed-mortgage-haproxy-backend-multi",
+        "indices": [
+          "logs-haproxy.log-mortgage"
+        ],
+        "query": {
+          "match_all": {}
+        }
+      },
+      "analysis_limits": {
+        "model_memory_limit": "50mb"
+      }
+    },
+    {
+      "_comment": "CROSS-SOURCE \u2014 HAProxy stat + nginx stubstatus: load balancer tier population job",
+      "_workshop_module": "Cross-source population: compares all load-balancer-tier nodes (HAProxy backends + nginx workers) as a unified population \u2014 a node that deviates from ALL its peers across both systems is a strong signal",
+      "job_id": "mortgage-lb-tier-population",
+      "description": "Cross-source population job comparing HAProxy backend pools and nginx worker stats as a unified load-balancer peer group. Nodes deviating from the combined population stand out regardless of which LB layer they belong to.",
+      "analysis_config": {
+        "bucket_span": "10m",
+        "detectors": [
+          {
+            "detector_description": "high_mean(haproxy.stat.response.http.5xx) over haproxy.stat.proxy.name",
+            "function": "high_mean",
+            "field_name": "haproxy.stat.response.http.5xx",
+            "over_field_name": "haproxy.stat.proxy.name"
+          },
+          {
+            "detector_description": "high_mean(haproxy.stat.request.errors) over haproxy.stat.proxy.name",
+            "function": "high_mean",
+            "field_name": "haproxy.stat.request.errors",
+            "over_field_name": "haproxy.stat.proxy.name"
+          },
+          {
+            "detector_description": "high_mean(haproxy.stat.session.current) over haproxy.stat.proxy.name",
+            "function": "high_mean",
+            "field_name": "haproxy.stat.session.current",
+            "over_field_name": "haproxy.stat.proxy.name"
+          }
+        ],
+        "influencers": [
+          "haproxy.stat.proxy.name",
+          "haproxy.stat.service_name",
+          "host.name"
+        ]
+      },
+      "data_description": {
+        "time_field": "@timestamp"
+      },
+      "datafeed_config": {
+        "datafeed_id": "datafeed-mortgage-lb-tier-population",
+        "indices": [
+          "metrics-haproxy.stat-mortgage",
+          "metrics-haproxy.info-mortgage"
+        ],
+        "query": {
+          "match_all": {}
+        }
+      },
+      "analysis_limits": {
+        "model_memory_limit": "30mb"
+      }
+    },
+    {
+      "_comment": "CROSS-SOURCE \u2014 Kafka broker + Kafka partition: messaging tier multi-metric with split",
+      "_workshop_module": "Cross-source multi-metric with split: broker throughput + partition lag for each topic \u2014 when underwriting-queue broker bytes/sec drops while partition offsets grow, that's a consumer lag anomaly",
+      "job_id": "mortgage-kafka-messaging-multi-split",
+      "description": "Cross-source multi-metric job across Kafka broker throughput and partition metrics, split by topic name. Detects per-topic throughput anomalies and partition lag accumulation in the LendPath messaging layer.",
+      "analysis_config": {
+        "bucket_span": "5m",
+        "detectors": [
+          {
+            "detector_description": "high_mean(kafka.broker.topic.net.out.bytes_per_sec) by kafka.topic.name",
+            "function": "high_mean",
+            "field_name": "kafka.broker.topic.net.out.bytes_per_sec",
+            "by_field_name": "kafka.topic.name"
+          },
+          {
+            "detector_description": "low_mean(kafka.broker.topic.net.out.bytes_per_sec) by kafka.topic.name",
+            "function": "low_mean",
+            "field_name": "kafka.broker.topic.net.out.bytes_per_sec",
+            "by_field_name": "kafka.topic.name"
+          },
+          {
+            "detector_description": "high_mean(kafka.partition.offset.newest) by kafka.topic.name",
+            "function": "high_mean",
+            "field_name": "kafka.partition.offset.newest",
+            "by_field_name": "kafka.topic.name"
+          }
+        ],
+        "influencers": [
+          "kafka.topic.name",
+          "kafka.broker.address",
+          "host.name"
+        ]
+      },
+      "data_description": {
+        "time_field": "@timestamp"
+      },
+      "datafeed_config": {
+        "datafeed_id": "datafeed-mortgage-kafka-messaging-multi-split",
+        "indices": [
+          "metrics-kafka.broker-mortgage",
+          "metrics-kafka.partition-mortgage"
+        ],
+        "query": {
+          "match_all": {}
+        }
+      },
+      "analysis_limits": {
+        "model_memory_limit": "30mb"
+      }
+    },
+    {
+      "_comment": "CROSS-SOURCE \u2014 Oracle DB audit + PingOne IAM audit: privileged access rare job",
+      "_workshop_module": "Cross-source rare: a user granted elevated PingOne roles who ALSO performs SYSDBA Oracle actions in the same bucket is a high-fidelity lateral movement indicator",
+      "job_id": "mortgage-privileged-access-combined-rare",
+      "description": "Cross-source rare job spanning Oracle database_audit and PingOne audit \u2014 detects privileged escalation patterns where IAM role grants (PingOne) correlate with elevated database activity (Oracle SYSDBA, DDL, EXPORT actions)",
+      "analysis_config": {
+        "bucket_span": "1h",
+        "detectors": [
+          {
+            "detector_description": "rare by oracle.database_audit.action partition oracle.database_audit.obj.schema",
+            "function": "rare",
+            "by_field_name": "oracle.database_audit.action",
+            "partition_field_name": "oracle.database_audit.obj.schema"
+          },
+          {
+            "detector_description": "rare by user.roles",
+            "function": "rare",
+            "by_field_name": "user.roles"
+          },
+          {
+            "detector_description": "rare by ping_one.audit.action.type",
+            "function": "rare",
+            "by_field_name": "ping_one.audit.action.type"
+          },
+          {
+            "detector_description": "high_count by event.action partition event.dataset",
+            "function": "high_count",
+            "by_field_name": "event.action",
+            "partition_field_name": "event.dataset"
+          }
+        ],
+        "influencers": [
+          "user.roles",
+          "oracle.database_audit.action",
+          "oracle.database_audit.obj.name",
+          "ping_one.audit.action.type",
+          "event.dataset",
+          "client.user.name"
+        ]
+      },
+      "data_description": {
+        "time_field": "@timestamp"
+      },
+      "datafeed_config": {
+        "datafeed_id": "datafeed-mortgage-privileged-access-rare",
+        "indices": [
+          "logs-oracle.database_audit-mortgage",
+          "logs-ping_one.audit-mortgage"
+        ],
+        "query": {
+          "match_all": {}
+        }
+      },
+      "analysis_limits": {
+        "model_memory_limit": "40mb"
+      }
+    },
+    {
+      "_comment": "CROSS-SOURCE \u2014 PingOne audit + mortgage audit: unified identity geo anomaly",
+      "_workshop_module": "Cross-source geo: builds a geo home-range per user.id drawing from both PingOne SSO logins AND internal LendPath audit events \u2014 impossible travel is more detectable with both sources",
+      "job_id": "mortgage-unified-identity-geo",
+      "description": "Cross-source geo anomaly job combining PingOne IAM logins and internal LendPath audit events to build a unified geographic home-range per user. Detects impossible travel across both the SSO layer and internal app layer.",
+      "analysis_config": {
+        "bucket_span": "1h",
+        "detectors": [
+          {
+            "detector_description": "lat_long(source.geo.location) by user.id",
+            "function": "lat_long",
+            "field_name": "source.geo.location",
+            "by_field_name": "user.id"
+          }
+        ],
+        "influencers": [
+          "user.id",
+          "user.roles",
+          "source.geo.country_iso_code",
+          "source.ip",
+          "event.dataset",
+          "event.action"
+        ]
+      },
+      "data_description": {
+        "time_field": "@timestamp"
+      },
+      "datafeed_config": {
+        "datafeed_id": "datafeed-mortgage-unified-identity-geo",
+        "indices": [
+          "logs-ping_one.audit-mortgage",
+          "logs-mortgage.audit-default"
+        ],
+        "query": {
+          "bool": {
+            "must": [
+              {
+                "exists": {
+                  "field": "source.geo.location"
+                }
+              },
+              {
+                "exists": {
+                  "field": "user.id"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "analysis_limits": {
+        "model_memory_limit": "30mb"
+      }
+    },
+    {
+      "_comment": "SINGLE SOURCE \u2014 Oracle sysmetric: multi-metric split by service.address",
+      "job_id": "mortgage-oracle-db-multi-split",
+      "description": "Per-instance multi-metric job on Oracle sysmetrics \u2014 detects degradation in buffer cache hit ratios, CPU usage, and response time per transaction on primary vs replica",
+      "analysis_config": {
+        "bucket_span": "15m",
+        "detectors": [
+          {
+            "detector_description": "low_mean(oracle.sysmetric.buffer_cache_hit_ratio) by service.address",
+            "function": "low_mean",
+            "field_name": "oracle.sysmetric.buffer_cache_hit_ratio",
+            "by_field_name": "service.address"
+          },
+          {
+            "detector_description": "high_mean(oracle.sysmetric.response_time_per_txn) by service.address",
+            "function": "high_mean",
+            "field_name": "oracle.sysmetric.response_time_per_txn",
+            "by_field_name": "service.address"
+          },
+          {
+            "detector_description": "high_mean(oracle.sysmetric.host_cpu_utilization_pct) by service.address",
+            "function": "high_mean",
+            "field_name": "oracle.sysmetric.host_cpu_utilization_pct",
+            "by_field_name": "service.address"
+          },
+          {
+            "detector_description": "high_mean(oracle.sysmetric.hard_parse_count_per_sec) by service.address",
+            "function": "high_mean",
+            "field_name": "oracle.sysmetric.hard_parse_count_per_sec",
+            "by_field_name": "service.address"
+          }
+        ],
+        "influencers": [
+          "service.address",
+          "host.name"
+        ]
+      },
+      "data_description": {
+        "time_field": "@timestamp"
+      },
+      "datafeed_config": {
+        "datafeed_id": "datafeed-mortgage-oracle-db-multi-split",
+        "indices": [
+          "metrics-oracle.sysmetric-mortgage"
+        ],
+        "query": {
+          "match_all": {}
+        }
+      },
+      "analysis_limits": {
+        "model_memory_limit": "20mb"
+      }
+    },
+    {
+      "_comment": "SINGLE SOURCE \u2014 Oracle tablespace: population split by service.address (instance)",
+      "job_id": "mortgage-oracle-tablespace-population",
+      "description": "Population analysis comparing tablespaces within each Oracle instance as peers. A tablespace consuming disproportionately more free space than its peers signals unexpected growth (bulk data load, audit log explosion, etc.)",
+      "analysis_config": {
+        "bucket_span": "1h",
+        "detectors": [
+          {
+            "detector_description": "low_mean(oracle.tablespace.extended_space.free.bytes) over oracle.tablespace.name partition service.address",
+            "function": "low_mean",
+            "field_name": "oracle.tablespace.extended_space.free.bytes",
+            "over_field_name": "oracle.tablespace.name",
+            "partition_field_name": "service.address"
+          }
+        ],
+        "influencers": [
+          "oracle.tablespace.name",
+          "service.address",
+          "host.name"
+        ]
+      },
+      "data_description": {
+        "time_field": "@timestamp"
+      },
+      "datafeed_config": {
+        "datafeed_id": "datafeed-mortgage-oracle-tablespace-population",
+        "indices": [
+          "metrics-oracle.tablespace-mortgage"
+        ],
+        "query": {
+          "match_all": {}
+        }
+      },
+      "analysis_limits": {
+        "model_memory_limit": "20mb"
+      }
+    },
+    {
+      "_comment": "CROSS-SOURCE \u2014 Oracle sysmetric + Oracle tablespace: combined DB change point",
+      "_workshop_module": "Cross-source change point: tablespace free space trending down while sysmetric redo_generated_per_sec spikes \u2014 together they indicate an uncontrolled bulk DML event",
+      "job_id": "mortgage-oracle-db-change-point",
+      "description": "Advanced job spanning Oracle sysmetric and tablespace data to detect correlated database events: bulk DML (high redo generation + tablespace consumption) and performance degradation (rising response time + falling cache hit ratio)",
+      "analysis_config": {
+        "bucket_span": "30m",
+        "detectors": [
+          {
+            "detector_description": "high_mean(oracle.sysmetric.redo_generated_per_sec) by service.address",
+            "function": "high_mean",
+            "field_name": "oracle.sysmetric.redo_generated_per_sec",
+            "by_field_name": "service.address"
+          },
+          {
+            "detector_description": "low_mean(oracle.tablespace.extended_space.free.bytes) by oracle.tablespace.name",
+            "function": "low_mean",
+            "field_name": "oracle.tablespace.extended_space.free.bytes",
+            "by_field_name": "oracle.tablespace.name"
+          },
+          {
+            "detector_description": "high_mean(oracle.sysmetric.average_active_sessions) by service.address",
+            "function": "high_mean",
+            "field_name": "oracle.sysmetric.average_active_sessions",
+            "by_field_name": "service.address"
+          }
+        ],
+        "influencers": [
+          "service.address",
+          "oracle.tablespace.name",
+          "host.name"
+        ]
+      },
+      "data_description": {
+        "time_field": "@timestamp"
+      },
+      "datafeed_config": {
+        "datafeed_id": "datafeed-mortgage-oracle-db-change-point",
+        "indices": [
+          "metrics-oracle.sysmetric-mortgage",
+          "metrics-oracle.tablespace-mortgage"
+        ],
+        "query": {
+          "match_all": {}
+        }
+      },
+      "analysis_limits": {
+        "model_memory_limit": "30mb"
+      }
+    }
+  ],
+  "data_frame_analytics_jobs": [
+    {
+      "_comment": "AKAMAI SIEM Outlier Detection \u2014 bot scores, user risk, rule actions",
+      "_workshop_module": "Module 12a: Outlier detection on Akamai edge security data. High bot scores + user risk status = likely automated attack.",
+      "id": "mortgage-akamai-outlier",
+      "description": "Outlier detection on Akamai SIEM logs. Sessions with unusually high bot scores and user risk scores are multi-dimensional outliers \u2014 likely sophisticated automated attacks against the mortgage portal.",
+      "source": {
+        "index": [
+          "logs-akamai.siem-mortgage"
+        ],
+        "query": {
+          "match_all": {}
+        },
+        "runtime_mappings": {
+          "data_stream.dataset": {
+            "type": "keyword"
+          },
+          "data_stream.type": {
+            "type": "keyword"
+          },
+          "data_stream.namespace": {
+            "type": "keyword"
+          }
+        }
+      },
+      "dest": {
+        "index": "mortgage-security-outliers",
+        "results_field": "ml"
+      },
+      "analysis": {
+        "outlier_detection": {
+          "n_neighbors": 10,
+          "compute_feature_influence": true,
+          "feature_influence_threshold": 0.1
+        }
+      },
+      "analyzed_fields": {
+        "includes": [
+          "akamai.siem.bot.score",
+          "akamai.siem.bot.response_segment",
+          "akamai.siem.user_risk.score",
+          "akamai.siem.user_risk.status"
+        ]
+      },
+      "model_memory_limit": "250mb"
+    },
+    {
+      "_comment": "CROSS-SOURCE Regression \u2014 Oracle sysmetric: predict response_time_per_txn",
+      "_workshop_module": "Regression: predict Oracle response_time_per_txn from cache hit ratios, CPU, parse rates, and session counts \u2014 enables proactive DB tuning before SLA breach",
+      "id": "mortgage-oracle-response-time-regression",
+      "description": "Regression model predicting oracle.sysmetric.response_time_per_txn from Oracle performance indicators. Once trained, deploy as ingest pipeline enrichment to flag documents where predicted latency exceeds SLA thresholds.",
+      "source": {
+        "index": [
+          "metrics-oracle.sysmetric-mortgage"
+        ],
+        "query": {
+          "match_all": {}
+        }
+      },
+      "dest": {
+        "index": "mortgage-oracle-regression",
+        "results_field": "ml"
+      },
+      "analysis": {
+        "regression": {
+          "dependent_variable": "oracle.sysmetric.response_time_per_txn",
+          "training_percent": 80,
+          "num_top_feature_importance_values": 6,
+          "prediction_field_name": "response_time_prediction"
+        }
+      },
+      "analyzed_fields": {
+        "includes": [
+          "oracle.sysmetric.buffer_cache_hit_ratio",
+          "oracle.sysmetric.library_cache_hit_ratio",
+          "oracle.sysmetric.cpu_usage_per_sec",
+          "oracle.sysmetric.host_cpu_utilization_pct",
+          "oracle.sysmetric.hard_parse_count_per_sec",
+          "oracle.sysmetric.average_active_sessions",
+          "oracle.sysmetric.io_megabytes_per_second",
+          "oracle.sysmetric.logical_reads_per_sec",
+          "oracle.sysmetric.physical_reads_per_sec",
+          "oracle.sysmetric.session_count",
+          "oracle.sysmetric.current_open_cursors_count",
+          "oracle.sysmetric.shared_pool_free_pct",
+          "oracle.sysmetric.response_time_per_txn"
+        ],
+        "excludes": [
+          "@timestamp",
+          "service.address",
+          "host.name"
+        ]
+      },
+      "model_memory_limit": "200mb"
+    },
+    {
+      "_comment": "CROSS-SOURCE Classification \u2014 PingOne audit + Oracle DB audit: classify privileged access as suspicious",
+      "_workshop_module": "Cross-source classification: label = oracle.database_audit.privilege (SYSDBA/DBA = suspicious); features drawn from both the IAM layer (PingOne risk score, MFA used, off-hours) and DB layer (action type, schema, object)",
+      "id": "mortgage-privileged-access-classification",
+      "description": "Binary classification model predicting whether a privileged access event is suspicious, trained across PingOne IAM audit and Oracle database audit. Features span both the identity layer and the database layer for a holistic model.",
+      "source": {
+        "index": [
+          "logs-ping_one.audit-mortgage",
+          "logs-oracle.database_audit-mortgage"
+        ],
+        "query": {
+          "match_all": {}
+        },
+        "_source": {
+          "includes": [
+            "ping_one.audit.risk.score",
+            "ping_one.audit.risk.level",
+            "ping_one.audit.action.type",
+            "ping_one.audit.result.status",
+            "oracle.database_audit.action",
+            "oracle.database_audit.privilege",
+            "event.outcome",
+            "user.id",
+            "user.roles",
+            "@timestamp"
+          ]
+        },
+        "runtime_mappings": {
+          "data_stream.dataset": {
+            "type": "keyword"
+          },
+          "data_stream.type": {
+            "type": "keyword"
+          },
+          "data_stream.namespace": {
+            "type": "keyword"
+          },
+          "client.address": {
+            "type": "keyword"
+          },
+          "client.ip": {
+            "type": "keyword"
+          },
+          "client.geo.location": {
+            "type": "keyword"
+          },
+          "client.geo.city_name": {
+            "type": "keyword"
+          },
+          "client.geo.country_iso_code": {
+            "type": "keyword"
+          },
+          "client.geo.region_name": {
+            "type": "keyword"
+          },
+          "client.user.id": {
+            "type": "keyword"
+          },
+          "ping_one.audit.risk.level": {
+            "type": "keyword"
+          },
+          "ping_one.audit.risk.score": {
+            "type": "double"
+          },
+          "ping_one.audit.action.type": {
+            "type": "keyword"
+          },
+          "ping_one.audit.result.status": {
+            "type": "keyword"
+          },
+          "event.outcome": {
+            "type": "keyword"
+          },
+          "event.action": {
+            "type": "keyword"
+          },
+          "user.roles": {
+            "type": "keyword"
+          },
+          "oracle.database_audit.action": {
+            "type": "keyword"
+          },
+          "oracle.database_audit.privilege": {
+            "type": "keyword"
+          },
+          "source.geo.country_iso_code": {
+            "type": "keyword"
+          },
+          "oracle.database_audit.obj.schema": {
+            "type": "keyword"
+          },
+          "oracle.database_audit.obj.name": {
+            "type": "keyword"
+          },
+          "user.name": {
+            "type": "keyword"
+          },
+          "oracle.database_audit.status": {
+            "type": "keyword"
+          },
+          "user.id": {
+            "type": "keyword"
+          },
+          "oracle.database_audit.result_code": {
+            "type": "keyword"
+          },
+          "event.dataset": {
+            "type": "keyword"
+          }
+        }
+      },
+      "dest": {
+        "index": "mortgage-privileged-access-classification",
+        "results_field": "ml"
+      },
+      "analysis": {
+        "classification": {
+          "dependent_variable": "ping_one.audit.risk.level",
+          "training_percent": 80,
+          "num_top_classes": 3,
+          "num_top_feature_importance_values": 5,
+          "prediction_field_name": "risk_level_prediction",
+          "class_assignment_objective": "maximize_minimum_recall"
+        }
+      },
+      "analyzed_fields": {
+        "includes": [
+          "ping_one.audit.risk.score",
+          "ping_one.audit.risk.level",
+          "ping_one.audit.action.type",
+          "ping_one.audit.result.status",
+          "oracle.database_audit.action",
+          "oracle.database_audit.privilege",
+          "event.outcome"
+        ],
+        "excludes": [
+          "@timestamp",
+          "user.id",
+          "user.name"
+        ]
+      },
+      "model_memory_limit": "150mb"
+    }
+  ],
+  "cross_source_job_summary": {
+    "description": "Jobs that span multiple integration data streams in a single datafeed",
+    "jobs": [
+      {
+        "job_id": "mortgage-edge-waf-correlated-rare",
+        "sources": [
+          "logs-akamai.siem-mortgage",
+          "logs-aws.waf-mortgage"
+        ],
+        "technique": "Rare",
+        "story": "Akamai edge + AWS WAF \u2014 attack patterns appearing across both security layers simultaneously"
+      },
+      {
+        "job_id": "mortgage-network-threat-combined",
+        "sources": [
+          "logs-aws.vpcflow-mortgage",
+          "logs-coredns.log-mortgage"
+        ],
+        "technique": "Rare + High Count",
+        "story": "VPC REJECT events + CoreDNS NXDOMAIN bursts \u2014 C2 beaconing and DNS exfiltration detection"
+      },
+      {
+        "job_id": "mortgage-lb-tier-population",
+        "sources": [
+          "metrics-haproxy.stat-mortgage",
+          "metrics-haproxy.info-mortgage"
+        ],
+        "technique": "Population",
+        "story": "HAProxy stat + info \u2014 unified load balancer tier population, any backend deviating from peers"
+      },
+      {
+        "job_id": "mortgage-kafka-messaging-multi-split",
+        "sources": [
+          "metrics-kafka.broker-mortgage",
+          "metrics-kafka.partition-mortgage"
+        ],
+        "technique": "Multi-Metric with split",
+        "story": "Kafka broker throughput + partition lag \u2014 per-topic consumer lag accumulation detection"
+      },
+      {
+        "job_id": "mortgage-privileged-access-combined-rare",
+        "sources": [
+          "logs-oracle.database_audit-mortgage",
+          "logs-ping_one.audit-mortgage"
+        ],
+        "technique": "Rare",
+        "story": "Oracle DB audit + PingOne IAM \u2014 privileged role grants correlated with elevated DB actions"
+      },
+      {
+        "job_id": "mortgage-unified-identity-geo",
+        "sources": [
+          "logs-ping_one.audit-mortgage",
+          "logs-mortgage.audit-default"
+        ],
+        "technique": "Geo (lat_long)",
+        "story": "PingOne SSO logins + internal app audit \u2014 unified geo home-range per user for impossible travel"
+      },
+      {
+        "job_id": "mortgage-oracle-db-change-point",
+        "sources": [
+          "metrics-oracle.sysmetric-mortgage",
+          "metrics-oracle.tablespace-mortgage"
+        ],
+        "technique": "Advanced (multi-detector)",
+        "story": "Oracle sysmetric redo spike + tablespace free space drop \u2014 bulk uncontrolled DML detection"
+      },
+      {
+        "job_id": "mortgage-multilayer-security-outlier",
+        "sources": [
+          "logs-akamai.siem-mortgage",
+          "logs-aws.waf-mortgage"
+        ],
+        "technique": "Outlier Detection (DFA)",
+        "story": "Akamai + WAF numeric features \u2014 multi-dimensional outlier sessions that evade both layers"
+      },
+      {
+        "job_id": "mortgage-privileged-access-classification",
+        "sources": [
+          "logs-ping_one.audit-mortgage",
+          "logs-oracle.database_audit-mortgage"
+        ],
+        "technique": "Classification (DFA)",
+        "story": "IAM risk features + DB action features \u2014 cross-layer privileged access risk classification"
+      }
+    ]
+  }
+}

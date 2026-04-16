@@ -1,0 +1,537 @@
+{
+  "description": "LendPath Mortgage ML Workshop \u2014 Anomaly Detection Job Definitions",
+  "anomaly_detection_jobs": [
+    {
+      "_comment": "MODULE 4 \u2014 Single Metric: nginx active connections",
+      "job_id": "mortgage-nginx-active-connections",
+      "description": "Detects anomalous nginx active connection counts on the mortgage gateway cluster",
+      "analysis_config": {
+        "bucket_span": "5m",
+        "detectors": [
+          {
+            "detector_description": "high_mean(nginx.stubstatus.active)",
+            "function": "high_mean",
+            "field_name": "nginx.stubstatus.active"
+          }
+        ],
+        "influencers": [
+          "host.hostname",
+          "nginx.stubstatus.hostname"
+        ]
+      },
+      "data_description": {
+        "time_field": "@timestamp",
+        "time_format": "epoch_ms"
+      },
+      "datafeed_config": {
+        "datafeed_id": "datafeed-mortgage-nginx-active-connections",
+        "indices": [
+          "metrics-nginx.stubstatus-mortgage"
+        ],
+        "query": {
+          "match_all": {}
+        },
+        "scroll_size": 1000
+      },
+      "model_plot_config": {
+        "enabled": true
+      },
+      "analysis_limits": {
+        "model_memory_limit": "10mb"
+      }
+    },
+    {
+      "_comment": "MODULE 5 \u2014 Multi-Metric (no split): nginx connection metrics",
+      "job_id": "mortgage-nginx-multi-no-split",
+      "description": "Multi-metric job tracking nginx connection states without host-level split",
+      "analysis_config": {
+        "bucket_span": "5m",
+        "detectors": [
+          {
+            "detector_description": "high_mean(nginx.stubstatus.active)",
+            "function": "high_mean",
+            "field_name": "nginx.stubstatus.active"
+          },
+          {
+            "detector_description": "high_mean(nginx.stubstatus.writing)",
+            "function": "high_mean",
+            "field_name": "nginx.stubstatus.writing"
+          },
+          {
+            "detector_description": "high_mean(nginx.stubstatus.waiting)",
+            "function": "high_mean",
+            "field_name": "nginx.stubstatus.waiting"
+          },
+          {
+            "detector_description": "low_mean(nginx.stubstatus.handled)",
+            "function": "low_mean",
+            "field_name": "nginx.stubstatus.handled"
+          }
+        ],
+        "influencers": [
+          "host.hostname",
+          "nginx.stubstatus.hostname"
+        ]
+      },
+      "data_description": {
+        "time_field": "@timestamp"
+      },
+      "datafeed_config": {
+        "datafeed_id": "datafeed-mortgage-nginx-multi-no-split",
+        "indices": [
+          "metrics-nginx.stubstatus-mortgage"
+        ],
+        "query": {
+          "match_all": {}
+        }
+      },
+      "analysis_limits": {
+        "model_memory_limit": "20mb"
+      }
+    },
+    {
+      "_comment": "MODULE 6 \u2014 Multi-Metric (with split): service metrics by service.name",
+      "job_id": "mortgage-services-multi-split",
+      "description": "Per-service anomaly detection for LendPath microservices (split by service.name)",
+      "analysis_config": {
+        "bucket_span": "5m",
+        "detectors": [
+          {
+            "detector_description": "high_mean(http.server.requests.latency.p95_ms) by service.name",
+            "function": "high_mean",
+            "field_name": "http.server.requests.latency.p95_ms",
+            "by_field_name": "service.name"
+          },
+          {
+            "detector_description": "high_mean(jvm.memory.heap.percent) by service.name",
+            "function": "high_mean",
+            "field_name": "jvm.memory.heap.percent",
+            "by_field_name": "service.name"
+          },
+          {
+            "detector_description": "high_mean(db.pool.active_connections) by service.name",
+            "function": "high_mean",
+            "field_name": "db.pool.active_connections",
+            "by_field_name": "service.name"
+          },
+          {
+            "detector_description": "high_mean(mortgage.metrics.queue_depth) by service.name",
+            "function": "high_mean",
+            "field_name": "mortgage.metrics.queue_depth",
+            "by_field_name": "service.name"
+          }
+        ],
+        "influencers": [
+          "service.name",
+          "host.hostname",
+          "service.version"
+        ]
+      },
+      "data_description": {
+        "time_field": "@timestamp"
+      },
+      "datafeed_config": {
+        "datafeed_id": "datafeed-mortgage-services-multi-split",
+        "indices": [
+          "metrics-mortgage.services-default"
+        ],
+        "query": {
+          "match_all": {}
+        }
+      },
+      "analysis_limits": {
+        "model_memory_limit": "50mb"
+      }
+    },
+    {
+      "_comment": "MODULE 7 \u2014 Population (no split): all hosts as peers",
+      "job_id": "mortgage-hosts-population-no-split",
+      "description": "Population analysis \u2014 detects hosts behaving differently from the full host pool",
+      "analysis_config": {
+        "bucket_span": "15m",
+        "detectors": [
+          {
+            "detector_description": "high_mean(system.cpu.total.pct) over host.hostname",
+            "function": "high_mean",
+            "field_name": "system.cpu.total.pct",
+            "over_field_name": "host.hostname"
+          },
+          {
+            "detector_description": "high_mean(system.memory.used.pct) over host.hostname",
+            "function": "high_mean",
+            "field_name": "system.memory.used.pct",
+            "over_field_name": "host.hostname"
+          },
+          {
+            "detector_description": "high_mean(system.load.1) over host.hostname",
+            "function": "high_mean",
+            "field_name": "system.load.1",
+            "over_field_name": "host.hostname"
+          }
+        ],
+        "influencers": [
+          "host.hostname",
+          "host.type",
+          "mortgage.host.role"
+        ]
+      },
+      "data_description": {
+        "time_field": "@timestamp"
+      },
+      "datafeed_config": {
+        "datafeed_id": "datafeed-mortgage-hosts-population-no-split",
+        "indices": [
+          "metrics-mortgage.hosts-default"
+        ],
+        "query": {
+          "match_all": {}
+        }
+      },
+      "analysis_limits": {
+        "model_memory_limit": "30mb"
+      }
+    },
+    {
+      "_comment": "MODULE 8 \u2014 Population (with split): peers grouped by host.type",
+      "job_id": "mortgage-hosts-population-split",
+      "description": "Population analysis with host.type partition \u2014 web vs app vs database vs cache vs messaging",
+      "analysis_config": {
+        "bucket_span": "15m",
+        "detectors": [
+          {
+            "detector_description": "high_mean(system.cpu.total.pct) over host.hostname partition host.type",
+            "function": "high_mean",
+            "field_name": "system.cpu.total.pct",
+            "over_field_name": "host.hostname",
+            "partition_field_name": "host.type"
+          },
+          {
+            "detector_description": "high_mean(system.memory.used.pct) over host.hostname partition host.type",
+            "function": "high_mean",
+            "field_name": "system.memory.used.pct",
+            "over_field_name": "host.hostname",
+            "partition_field_name": "host.type"
+          },
+          {
+            "detector_description": "high_mean(system.filesystem.used.pct) over host.hostname partition host.type",
+            "function": "high_mean",
+            "field_name": "system.filesystem.used.pct",
+            "over_field_name": "host.hostname",
+            "partition_field_name": "host.type"
+          }
+        ],
+        "influencers": [
+          "host.hostname",
+          "host.type",
+          "mortgage.host.role"
+        ]
+      },
+      "data_description": {
+        "time_field": "@timestamp"
+      },
+      "datafeed_config": {
+        "datafeed_id": "datafeed-mortgage-hosts-population-split",
+        "indices": [
+          "metrics-mortgage.hosts-default"
+        ],
+        "query": {
+          "match_all": {}
+        }
+      },
+      "analysis_limits": {
+        "model_memory_limit": "50mb"
+      }
+    },
+    {
+      "_comment": "MODULE 9 \u2014 Advanced: LOS multi-detector with by/partition/rare",
+      "job_id": "mortgage-los-advanced",
+      "description": "Advanced multi-detector job on loan application logs \u2014 latency by service+loan_type, credit score by LO, rare stages",
+      "analysis_config": {
+        "bucket_span": "15m",
+        "detectors": [
+          {
+            "detector_description": "high_mean(event.duration) by service.name partition mortgage.application.loan_type",
+            "function": "high_mean",
+            "field_name": "event.duration",
+            "by_field_name": "service.name",
+            "partition_field_name": "mortgage.application.loan_type"
+          },
+          {
+            "detector_description": "High error event count by service",
+            "function": "high_count",
+            "by_field_name": "service.name"
+          },
+          {
+            "detector_description": "mean(mortgage.application.credit_score) by mortgage.application.loan_officer_id",
+            "function": "mean",
+            "field_name": "mortgage.application.credit_score",
+            "by_field_name": "mortgage.application.loan_officer_id"
+          },
+          {
+            "detector_description": "high_mean(mortgage.application.loan_amount) by mortgage.application.branch",
+            "function": "high_mean",
+            "field_name": "mortgage.application.loan_amount",
+            "by_field_name": "mortgage.application.branch"
+          },
+          {
+            "detector_description": "rare by mortgage.application.stage",
+            "function": "rare",
+            "by_field_name": "mortgage.application.stage"
+          }
+        ],
+        "influencers": [
+          "service.name",
+          "mortgage.application.loan_type",
+          "mortgage.application.loan_officer_id",
+          "mortgage.application.branch",
+          "host.hostname"
+        ]
+      },
+      "data_description": {
+        "time_field": "@timestamp"
+      },
+      "datafeed_config": {
+        "datafeed_id": "datafeed-mortgage-los-advanced",
+        "indices": [
+          "logs-mortgage.applications-default"
+        ],
+        "query": {
+          "match_all": {}
+        }
+      },
+      "analysis_limits": {
+        "model_memory_limit": "100mb"
+      }
+    },
+    {
+      "_comment": "MODULE 10 \u2014 Rare: audit events by action, user, and country",
+      "job_id": "mortgage-audit-rare",
+      "description": "Rare detector on audit logs \u2014 surfaces infrequent event actions, users, and geo origins",
+      "analysis_config": {
+        "bucket_span": "1h",
+        "detectors": [
+          {
+            "detector_description": "rare by event.action",
+            "function": "rare",
+            "by_field_name": "event.action"
+          },
+          {
+            "detector_description": "rare by user.id partition event.action",
+            "function": "rare",
+            "by_field_name": "user.id",
+            "partition_field_name": "event.action"
+          },
+          {
+            "detector_description": "rare by source.geo.country_iso_code",
+            "function": "rare",
+            "by_field_name": "source.geo.country_iso_code"
+          }
+        ],
+        "influencers": [
+          "user.id",
+          "event.action",
+          "source.geo.country_iso_code",
+          "user.roles"
+        ]
+      },
+      "data_description": {
+        "time_field": "@timestamp"
+      },
+      "datafeed_config": {
+        "datafeed_id": "datafeed-mortgage-audit-rare",
+        "indices": [
+          "logs-mortgage.audit-default"
+        ],
+        "query": {
+          "match_all": {}
+        }
+      },
+      "analysis_limits": {
+        "model_memory_limit": "60mb"
+      }
+    },
+    {
+      "_comment": "MODULE 11 \u2014 Geo: lat_long detector on APM span source locations",
+      "job_id": "mortgage-geo-login-anomaly",
+      "description": "Geo anomaly detection \u2014 detects loan officers and users accessing the platform from unusual locations",
+      "analysis_config": {
+        "bucket_span": "1h",
+        "detectors": [
+          {
+            "detector_description": "lat_long(client.geo.location) by user.id",
+            "function": "lat_long",
+            "field_name": "client.geo.location",
+            "by_field_name": "user.id"
+          }
+        ],
+        "influencers": [
+          "user.id",
+          "user.roles",
+          "client.geo.country_iso_code",
+          "client.geo.city_name",
+          "client.ip"
+        ]
+      },
+      "data_description": {
+        "time_field": "@timestamp"
+      },
+      "datafeed_config": {
+        "datafeed_id": "datafeed-mortgage-geo-login",
+        "indices": [
+          "traces-apm-default"
+        ],
+        "query": {
+          "bool": {
+            "must": [
+              {
+                "exists": {
+                  "field": "client.geo.location"
+                }
+              },
+              {
+                "exists": {
+                  "field": "user.id"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "analysis_limits": {
+        "model_memory_limit": "30mb"
+      }
+    }
+  ],
+  "data_frame_analytics_jobs": [
+    {
+      "_comment": "MODULE 12 \u2014 Outlier Detection: APM spans",
+      "id": "mortgage-spans-outlier-detection",
+      "description": "Detects anomalous user session behavior in APM span data \u2014 high outlier scores indicate potential fraud or attack patterns",
+      "source": {
+        "index": [
+          "traces-apm-default"
+        ],
+        "query": {
+          "match_all": {}
+        }
+      },
+      "dest": {
+        "index": "mortgage-spans-outliers",
+        "results_field": "ml"
+      },
+      "analysis": {
+        "outlier_detection": {
+          "n_neighbors": 10,
+          "feature_influence_threshold": 0.1,
+          "compute_feature_influence": true
+        }
+      },
+      "analyzed_fields": {
+        "includes": [
+          "labels.loan_amount",
+          "labels.session_duration_sec",
+          "labels.pages_visited",
+          "labels.docs_downloaded",
+          "labels.failed_auth_attempts",
+          "transaction.duration.us",
+          "http.response.status_code"
+        ]
+      },
+      "model_memory_limit": "100mb"
+    },
+    {
+      "_comment": "MODULE 13 \u2014 Regression: predict memory pressure score",
+      "id": "mortgage-hosts-regression",
+      "description": "Regression model to predict mortgage.host.memory_pressure_score from system metrics \u2014 enables proactive capacity management",
+      "source": {
+        "index": [
+          "metrics-mortgage.hosts-default"
+        ],
+        "query": {
+          "match_all": {}
+        }
+      },
+      "dest": {
+        "index": "mortgage-hosts-regression",
+        "results_field": "ml"
+      },
+      "analysis": {
+        "regression": {
+          "dependent_variable": "mortgage.host.memory_pressure_score",
+          "training_percent": 80,
+          "num_top_feature_importance_values": 5,
+          "prediction_field_name": "memory_pressure_prediction"
+        }
+      },
+      "analyzed_fields": {
+        "includes": [
+          "system.cpu.total.pct",
+          "system.cpu.user.pct",
+          "system.cpu.iowait.pct",
+          "system.memory.used.pct",
+          "system.load.1",
+          "system.load.5",
+          "system.diskio.read.bytes",
+          "system.diskio.write.bytes",
+          "system.network.in.bytes",
+          "system.network.out.bytes",
+          "mortgage.host.memory_pressure_score"
+        ],
+        "excludes": [
+          "@timestamp",
+          "host.hostname",
+          "mortgage.host.incident_count"
+        ]
+      },
+      "model_memory_limit": "200mb"
+    },
+    {
+      "_comment": "MODULE 14 \u2014 Classification: predict audit.is_suspicious",
+      "id": "mortgage-audit-classification",
+      "description": "Binary classification model to predict whether an audit event is suspicious \u2014 trained on labeled audit data",
+      "source": {
+        "index": [
+          "logs-mortgage.audit-default"
+        ],
+        "query": {
+          "match_all": {}
+        }
+      },
+      "dest": {
+        "index": "mortgage-audit-classification",
+        "results_field": "ml"
+      },
+      "analysis": {
+        "classification": {
+          "dependent_variable": "audit.is_suspicious",
+          "training_percent": 80,
+          "num_top_classes": 2,
+          "num_top_feature_importance_values": 5,
+          "prediction_field_name": "is_suspicious_prediction",
+          "class_assignment_objective": "maximize_minimum_recall"
+        }
+      },
+      "analyzed_fields": {
+        "includes": [
+          "audit.risk_score",
+          "audit.mfa_used",
+          "audit.off_hours",
+          "audit.new_device",
+          "audit.vpn_detected",
+          "event.action",
+          "user.roles",
+          "source.geo.country_iso_code",
+          "audit.is_suspicious"
+        ],
+        "excludes": [
+          "@timestamp",
+          "user.id",
+          "user.name",
+          "user.email",
+          "audit.session_id"
+        ]
+      },
+      "model_memory_limit": "100mb"
+    }
+  ]
+}

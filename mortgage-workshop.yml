@@ -1,0 +1,2564 @@
+# =============================================================================
+# Mortgage ML Workshop — SDG Configuration
+# =============================================================================
+# Generates ECS-aligned observability data for an Elastic ML/Anomaly Detection
+# workshop centred on a fictional home mortgage platform ("LendPath").
+#
+# Data streams produced:
+#   logs-nginx.access-mortgage        → nginx access logs    (Log Rate, Pattern, Rare)
+#   logs-nginx.error-mortgage         → nginx error logs     (Log Rate, Log Pattern)
+#   metrics-nginx.stubstatus-mortgage → nginx stub metrics   (Single/Multi Metric)
+#   logs-mortgage.applications-default→ application logs     (Change Point, Advanced)
+#   metrics-mortgage.services-default → service metrics      (Population, Multi-Metric)
+#   traces-apm-mortgage               → APM traces (use apm_trace_generator.py, not SDG)
+#   logs-mortgage.audit-default       → audit/security       (Rare, Classification)
+#   metrics-mortgage.hosts-default    → host system metrics  (Regression, Population)
+#
+# NEW — Integration Data Streams:
+#   logs-akamai.siem-mortgage         → Akamai WAF/bot events (Log Rate, Rare, Outlier)
+#   logs-aws.vpcflow-mortgage         → AWS VPC Flow logs     (Multi-Metric, Rare)
+#   logs-aws.waf-mortgage             → AWS WAF events        (Log Pattern, Rare)
+#   logs-coredns.log-mortgage         → CoreDNS query logs    (Rare, Log Pattern)
+#   logs-haproxy.log-mortgage         → HAProxy access logs   (Multi-Metric w/split)
+#   metrics-haproxy.stat-mortgage     → HAProxy stat metrics  (Population)
+#   metrics-haproxy.info-mortgage     → HAProxy info metrics  (Single Metric)
+#   metrics-kafka.broker-mortgage     → Kafka broker metrics  (Multi-Metric w/split)
+#   metrics-kafka.partition-mortgage  → Kafka partition metrics(Population w/split)
+#   logs-oracle.database_audit-mortgage→Oracle DB audit logs  (Rare, Classification)
+#   metrics-oracle.sysmetric-mortgage → Oracle system metrics (Multi-Metric, Regression)
+#   metrics-oracle.tablespace-mortgage→ Oracle tablespace     (Change Point, Population)
+#   logs-ping_one.audit-mortgage      → PingOne IAM events    (Rare, Geo)
+# =============================================================================
+
+# ─── Elasticsearch connection ─────────────────────────────────────────────────
+elasticsearchScheme: https
+elasticsearchHost: localhost
+elasticsearchPort: 9200
+elasticsearchUser: elastic
+elasticsearchPassword: changeme
+verifyCerts: false
+
+# ─── Workloads ────────────────────────────────────────────────────────────────
+workloads:
+
+  # ===========================================================================
+  # 1. NGINX ACCESS LOGS  → logs-nginx.access-mortgage
+  #    ML techniques: Log Rate Analysis, Log Pattern Analysis, Rare
+  #    Generates realistic HTTP traffic with mortgage-specific URL paths,
+  #    realistic status code distribution, and bursty patterns.
+  # ===========================================================================
+  - indexName: logs-nginx.access-mortgage
+    dataStream: true
+    purgeOnStart: false
+    workloadThreads: 2
+    workloadSleep: 120          # ~50 req/min baseline; peakTime doubles it
+    elasticsearchBulkQueueDepth: 25
+    peakTime: "10:00:00"        # business-hours peak (10 AM)
+
+    fields:
+      # ── ECS base ────────────────────────────────────────────────────────────
+      - name: "@timestamp"
+        type: timestamp
+        range: "0,1"            # current ±1 min (live streaming)
+
+      - name: ecs.version
+        value: "8.11.0"
+
+      # ── data_stream ─────────────────────────────────────────────────────────
+      - name: data_stream.type
+        value: logs
+      - name: data_stream.dataset
+        value: nginx.access
+      - name: data_stream.namespace
+        value: mortgage
+
+      # ── event ────────────────────────────────────────────────────────────────
+      - name: event.kind
+        value: event
+      - name: event.category
+        value: web
+      - name: event.type
+        value: access
+      - name: event.dataset
+        value: nginx.access
+      - name: event.outcome
+        type: random_string_from_list
+        custom_list: "success,success,success,success,failure"   # 80% success
+      - name: event.duration
+        type: long
+        range: "1000000,2500000000"   # nanoseconds: 1ms – 2.5s
+
+      # ── agent ────────────────────────────────────────────────────────────────
+      - name: agent.type
+        value: filebeat
+      - name: agent.version
+        value: "8.13.0"
+      - name: agent.name
+        type: hostname
+
+      # ── host ─────────────────────────────────────────────────────────────────
+      - name: host.hostname
+        type: random_string_from_list
+        custom_list: "nginx-gw-01,nginx-gw-02,nginx-gw-03"
+      - name: host.name
+        type: random_string_from_list
+        custom_list: "nginx-gw-01,nginx-gw-02,nginx-gw-03"
+      - name: host.os.family
+        value: debian
+      - name: host.os.name
+        value: Ubuntu
+      - name: host.os.type
+        value: linux
+
+      # ── http ─────────────────────────────────────────────────────────────────
+      - name: http.request.method
+        type: random_string_from_list
+        custom_list: "GET,GET,GET,GET,POST,POST,PUT,DELETE"
+      - name: http.response.status_code
+        type: random_integer_from_list
+        custom_list: "200,200,200,200,200,201,301,304,400,401,403,404,429,500,502,503"
+      - name: http.response.body.bytes
+        type: long
+        range: "512,524288"     # 512 B – 512 KB
+      - name: http.version
+        value: "1.1"
+
+      # ── url ──────────────────────────────────────────────────────────────────
+      - name: url.path
+        type: random_string_from_list
+        custom_list: >
+          /api/v1/applications,
+          /api/v1/applications/submit,
+          /api/v1/applications/status,
+          /api/v1/rates/current,
+          /api/v1/rates/lock,
+          /api/v1/documents/upload,
+          /api/v1/documents/verify,
+          /api/v1/underwriting/decision,
+          /api/v1/underwriting/queue,
+          /api/v1/closing/schedule,
+          /api/v1/closing/documents,
+          /api/v1/payments/escrow,
+          /api/v1/payments/down,
+          /api/v1/credit/check,
+          /api/v1/appraisal/order,
+          /api/v1/appraisal/results,
+          /api/v1/title/search,
+          /api/v1/flood/cert,
+          /health,
+          /metrics,
+          /login,
+          /logout,
+          /dashboard,
+          /api/v1/admin/reports,
+          /api/v1/webhooks/los
+      - name: url.original
+        type: random_string_from_list
+        custom_list: >
+          /api/v1/applications,
+          /api/v1/applications/submit,
+          /api/v1/rates/current,
+          /api/v1/documents/upload,
+          /api/v1/underwriting/decision,
+          /health
+
+      # ── source / client ───────────────────────────────────────────────────────
+      - name: source.ip
+        type: ipv4
+      - name: source.address
+        type: ipv4
+      - name: client.ip
+        type: ipv4
+
+      # ── user_agent ────────────────────────────────────────────────────────────
+      - name: user_agent.original
+        type: random_string_from_list
+        custom_list: >
+          Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36,
+          Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36,
+          Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15,
+          python-requests/2.31.0,
+          LendPath-MobilApp/3.2.1 iOS/17.0,
+          LendPath-MobilApp/3.2.1 Android/14.0,
+          axios/1.6.2,
+          curl/7.88.1
+      - name: user_agent.name
+        type: random_string_from_list
+        custom_list: "Chrome,Chrome,Chrome,Safari,Mobile Safari,Python Requests,LendPath App,axios,curl"
+
+      # ── nginx-specific ────────────────────────────────────────────────────────
+      - name: nginx.access.response_time
+        type: long
+        range: "1,5000"         # ms
+      - name: nginx.access.remote_ip_list
+        type: ipv4
+
+      # ── log ───────────────────────────────────────────────────────────────────
+      - name: log.offset
+        type: long
+        range: "0,999999999"
+      - name: log.file.path
+        value: "/var/log/nginx/access.log"
+
+      # ── tags ──────────────────────────────────────────────────────────────────
+      - name: tags
+        value: nginx-access
+
+      # ── service ───────────────────────────────────────────────────────────────
+      - name: service.name
+        value: lendpath-gateway
+      - name: service.type
+        value: nginx
+
+
+  # ===========================================================================
+  # 2. NGINX ERROR LOGS  → logs-nginx.error-mortgage
+  #    ML techniques: Log Rate Analysis, Log Pattern Analysis
+  # ===========================================================================
+  - indexName: logs-nginx.error-mortgage
+    dataStream: true
+    purgeOnStart: false
+    workloadThreads: 1
+    workloadSleep: 800          # ~75 errors/min (lower volume than access)
+    elasticsearchBulkQueueDepth: 10
+
+    fields:
+      - name: "@timestamp"
+        type: timestamp
+        range: "0,1"
+
+      - name: ecs.version
+        value: "8.11.0"
+
+      - name: data_stream.type
+        value: logs
+      - name: data_stream.dataset
+        value: nginx.error
+      - name: data_stream.namespace
+        value: mortgage
+
+      - name: event.kind
+        value: event
+      - name: event.category
+        value: web
+      - name: event.type
+        value: error
+      - name: event.dataset
+        value: nginx.error
+      - name: event.module
+        value: nginx
+
+      - name: agent.type
+        value: filebeat
+      - name: agent.version
+        value: "8.13.0"
+
+      - name: host.hostname
+        type: random_string_from_list
+        custom_list: "nginx-gw-01,nginx-gw-02,nginx-gw-03"
+      - name: host.name
+        type: random_string_from_list
+        custom_list: "nginx-gw-01,nginx-gw-02,nginx-gw-03"
+
+      - name: log.level
+        type: random_string_from_list
+        custom_list: "warn,warn,error,error,error,crit,notice"
+      - name: log.file.path
+        value: "/var/log/nginx/error.log"
+      - name: log.offset
+        type: long
+        range: "0,999999999"
+
+      - name: message
+        type: random_string_from_list
+        custom_list: >
+          "upstream timed out (110: Connection timed out) while reading response header from upstream: 10.0.1.45:8080",
+          "connect() failed (111: Connection refused) while connecting to upstream: 10.0.1.46:8081",
+          "upstream sent invalid header while reading response header from upstream: 10.0.1.47:8082",
+          "no live upstreams while connecting to upstream: lendpath-underwriting",
+          "SSL_read() failed (SSL: error:1408F10B) while reading from upstream",
+          "limiting requests, excess: 12.456 by zone 'api_rate_limit'",
+          "limiting requests, excess: 45.123 by zone 'login_rate_limit'",
+          "client intended to send too large body: 10485761 bytes",
+          "open() '/var/cache/nginx/fastcgi_temp' failed (13: Permission denied)",
+          "recv() failed (104: Connection reset by peer)"
+
+      - name: nginx.error.connection_id
+        type: long
+        range: "1,9999999"
+
+      - name: process.pid
+        type: int
+        range: "1,32768"
+      - name: process.thread.id
+        type: int
+        range: "1,32768"
+
+      - name: tags
+        value: nginx-error
+
+
+  # ===========================================================================
+  # 3. NGINX STUB STATUS METRICS  → metrics-nginx.stubstatus-mortgage
+  #    ML techniques: Single Metric job, Multi-Metric job (no split)
+  #    Gauges and counters from nginx stub_status endpoint; collected every 10s
+  # ===========================================================================
+  - indexName: metrics-nginx.stubstatus-mortgage
+    dataStream: true
+    purgeOnStart: false
+    workloadThreads: 3          # one thread per nginx host
+    workloadSleep: 10000        # collect every 10 s (matches metricbeat default)
+    elasticsearchBulkQueueDepth: 1
+    peakTime: "10:00:00"
+
+    fields:
+      - name: "@timestamp"
+        type: timestamp
+        range: "0,0"
+
+      - name: ecs.version
+        value: "8.11.0"
+
+      - name: data_stream.type
+        value: metrics
+      - name: data_stream.dataset
+        value: nginx.stubstatus
+      - name: data_stream.namespace
+        value: mortgage
+
+      - name: event.dataset
+        value: nginx.stubstatus
+      - name: event.module
+        value: nginx
+      - name: event.duration
+        type: long
+        range: "500000,5000000"
+
+      - name: agent.type
+        value: metricbeat
+      - name: agent.version
+        value: "8.13.0"
+      - name: agent.id
+        type: uuid
+
+      - name: host.name
+        type: random_string_from_list
+        custom_list: "nginx-gw-01,nginx-gw-02,nginx-gw-03"
+
+      - name: nginx.stubstatus.hostname
+        type: random_string_from_list
+        custom_list: "nginx-gw-01:80,nginx-gw-02:80,nginx-gw-03:80"
+      - name: nginx.stubstatus.active
+        type: int
+        range: "1,500"
+      - name: nginx.stubstatus.current
+        type: int
+        range: "1,500"
+      - name: nginx.stubstatus.accepts
+        type: long
+        range: "100000,10000000"
+      - name: nginx.stubstatus.handled
+        type: long
+        range: "100000,10000000"
+      - name: nginx.stubstatus.requests
+        type: long
+        range: "200000,20000000"
+      - name: nginx.stubstatus.reading
+        type: int
+        range: "0,50"
+      - name: nginx.stubstatus.writing
+        type: int
+        range: "1,200"
+      - name: nginx.stubstatus.waiting
+        type: int
+        range: "0,300"
+      - name: nginx.stubstatus.dropped
+        type: int
+        range: "0,50"
+
+      - name: service.address
+        type: random_string_from_list
+        custom_list: "http://nginx-gw-01:80/server-status,http://nginx-gw-02:80/server-status,http://nginx-gw-03:80/server-status"
+      - name: service.type
+        value: nginx
+
+      - name: metricset.name
+        value: stubstatus
+      - name: metricset.period
+        value: 10000
+
+      - name: tags
+        value: nginx-stubstatus
+
+
+  # ===========================================================================
+  # 4. MORTGAGE APPLICATION LOGS  → logs-mortgage.applications-default
+  #    ML techniques: Change Point Detection, Advanced job
+  #    Structured application logs from the LendPath LOS (Loan Origination System)
+  #    Includes loan pipeline stages, durations, amounts — rich for ML.
+  # ===========================================================================
+  - indexName: logs-mortgage.applications-default
+    dataStream: true
+    purgeOnStart: false
+    workloadThreads: 2
+    workloadSleep: 200
+    elasticsearchBulkQueueDepth: 20
+    peakTime: "14:00:00"        # post-lunch underwriting peak
+
+    fields:
+      - name: "@timestamp"
+        type: timestamp
+        range: "0,1"
+
+      - name: ecs.version
+        value: "8.11.0"
+
+      - name: data_stream.type
+        value: logs
+      - name: data_stream.dataset
+        value: mortgage.applications
+      - name: data_stream.namespace
+        value: default
+
+      - name: event.kind
+        value: event
+      - name: event.category
+        value: process
+      - name: event.dataset
+        value: mortgage.applications
+      - name: event.outcome
+        type: random_string_from_list
+        custom_list: "success,success,success,success,failure,unknown"
+      - name: event.duration
+        type: long
+        range: "50000000,45000000000"   # 50ms – 45s in nanoseconds
+      - name: event.sequence
+        type: sequence
+        start: 1
+        step: 1
+
+      - name: agent.type
+        value: filebeat
+      - name: agent.version
+        value: "8.13.0"
+      - name: agent.name
+        type: random_string_from_list
+        custom_list: "los-app-01,los-app-02,los-app-03"
+
+      # ── host ──────────────────────────────────────────────────────────────────
+      - name: host.hostname
+        type: random_string_from_list
+        custom_list: "los-app-01,los-app-02,los-app-03"
+      - name: host.name
+        type: random_string_from_list
+        custom_list: "los-app-01,los-app-02,los-app-03"
+      - name: host.os.type
+        value: linux
+
+      # ── service ───────────────────────────────────────────────────────────────
+      - name: service.name
+        type: random_string_from_list
+        custom_list: >
+          lendpath-los,
+          lendpath-underwriting,
+          lendpath-document-service,
+          lendpath-credit-service,
+          lendpath-appraisal-service,
+          lendpath-closing-service,
+          lendpath-notification-service
+      - name: service.version
+        type: random_string_from_list
+        custom_list: "3.1.0,3.1.1,3.2.0,3.2.1"
+      - name: service.environment
+        type: random_string_from_list
+        custom_list: "production,production,production,staging"
+
+      # ── log level ─────────────────────────────────────────────────────────────
+      - name: log.level
+        type: random_string_from_list
+        custom_list: "INFO,INFO,INFO,INFO,WARN,WARN,ERROR,DEBUG"
+      - name: log.logger
+        type: random_string_from_list
+        custom_list: >
+          com.lendpath.los.ApplicationController,
+          com.lendpath.los.UnderwritingEngine,
+          com.lendpath.los.DocumentProcessor,
+          com.lendpath.los.CreditCheckService,
+          com.lendpath.los.RateCalculator,
+          com.lendpath.los.ClosingScheduler,
+          com.lendpath.los.FraudDetector,
+          com.lendpath.los.EscrowCalculator
+
+      # ── message ───────────────────────────────────────────────────────────────
+      - name: message
+        type: random_string_from_list
+        custom_list: >
+          "Loan application submitted successfully",
+          "Credit check initiated for application",
+          "Credit score retrieved from bureau",
+          "Automated underwriting decision: Approved",
+          "Automated underwriting decision: Refer",
+          "Automated underwriting decision: Denied",
+          "Document package sent to applicant",
+          "Document received and validated",
+          "Appraisal ordered for subject property",
+          "Appraisal report received",
+          "Rate lock requested by loan officer",
+          "Rate lock confirmed at current market rate",
+          "Conditional approval issued",
+          "Conditions cleared by underwriter",
+          "Clear to close issued",
+          "Closing disclosure sent",
+          "Loan funded and disbursed",
+          "Application withdrawn by borrower",
+          "Income verification failed: insufficient documentation",
+          "Fraud risk flag triggered: velocity check",
+          "AVM value outside acceptable range",
+          "DTI ratio exceeds program guidelines",
+          "LTV ratio requires PMI",
+          "Database connection pool exhausted",
+          "Downstream credit bureau timeout after 30s",
+          "Job queue depth exceeded threshold: 847 items pending"
+
+      # ── mortgage-specific fields ──────────────────────────────────────────────
+      - name: mortgage.application.id
+        type: uuid
+      - name: mortgage.application.stage
+        type: random_string_from_list
+        custom_list: >
+          application,
+          pre_qualification,
+          processing,
+          underwriting,
+          conditional_approval,
+          conditions_review,
+          clear_to_close,
+          closing,
+          funded,
+          withdrawn,
+          denied
+      - name: mortgage.application.loan_type
+        type: random_string_from_list
+        custom_list: "Conventional,FHA,VA,USDA,Jumbo,Conventional,Conventional,FHA"
+      - name: mortgage.application.loan_purpose
+        type: random_string_from_list
+        custom_list: "Purchase,Purchase,Purchase,Refinance,CashOut,Purchase"
+      - name: mortgage.application.loan_amount
+        type: float
+        range: "75000,2500000"
+      - name: mortgage.application.property_value
+        type: float
+        range: "100000,3000000"
+      - name: mortgage.application.ltv_ratio
+        type: float
+        range: "50,97"
+      - name: mortgage.application.dti_ratio
+        type: float
+        range: "15,55"
+      - name: mortgage.application.credit_score
+        type: int
+        range: "580,850"
+      - name: mortgage.application.interest_rate
+        type: float
+        range: "5.5,8.5"
+      - name: mortgage.application.term_months
+        type: random_integer_from_list
+        custom_list: "360,360,360,180,120,240"
+      - name: mortgage.application.days_in_stage
+        type: int
+        range: "0,45"
+      - name: mortgage.application.loan_officer_id
+        type: random_string_from_list
+        custom_list: "LO-001,LO-002,LO-003,LO-004,LO-005,LO-006,LO-007,LO-008,LO-009,LO-010"
+      - name: mortgage.application.branch
+        type: random_string_from_list
+        custom_list: >
+          Pittsburgh-PA,
+          Philadelphia-PA,
+          Columbus-OH,
+          Cleveland-OH,
+          Detroit-MI,
+          Chicago-IL,
+          Indianapolis-IN,
+          Cincinnati-OH,
+          Louisville-KY,
+          Nashville-TN
+
+      # ── process ───────────────────────────────────────────────────────────────
+      - name: process.name
+        type: random_string_from_list
+        custom_list: "lendpath-los,lendpath-underwriting,lendpath-doc-service"
+      - name: process.pid
+        type: int
+        range: "1,65535"
+      - name: process.thread.name
+        type: random_string_from_list
+        custom_list: "main,worker-1,worker-2,worker-3,async-pool-1,async-pool-2,scheduler"
+
+      # ── trace correlation ─────────────────────────────────────────────────────
+      - name: trace.id
+        type: uuid
+      - name: transaction.id
+        type: hash
+      - name: span.id
+        type: hash
+
+      # ── tags ──────────────────────────────────────────────────────────────────
+      - name: tags
+        value: mortgage-applications
+
+
+  # ===========================================================================
+  # 5. MORTGAGE SERVICE METRICS  → metrics-mortgage.services-default
+  #    ML techniques: Multi-Metric (with split on service.name),
+  #                   Population Analysis (with/without split)
+  #    JVM-style metrics per microservice instance
+  # ===========================================================================
+  - indexName: metrics-mortgage.services-default
+    dataStream: true
+    purgeOnStart: false
+    workloadThreads: 2
+    workloadSleep: 30000        # 30 s collection interval
+    elasticsearchBulkQueueDepth: 7   # 7 services per collection cycle
+
+    fields:
+      - name: "@timestamp"
+        type: timestamp
+        range: "0,0"
+
+      - name: ecs.version
+        value: "8.11.0"
+
+      - name: data_stream.type
+        value: metrics
+      - name: data_stream.dataset
+        value: mortgage.services
+      - name: data_stream.namespace
+        value: default
+
+      - name: event.kind
+        value: metric
+      - name: event.dataset
+        value: mortgage.services
+      - name: event.module
+        value: mortgage
+
+      - name: agent.type
+        value: metricbeat
+      - name: agent.version
+        value: "8.13.0"
+
+      # ── service identity (split dimension for ML) ─────────────────────────────
+      - name: service.name
+        type: random_string_from_list
+        custom_list: >
+          lendpath-los,
+          lendpath-underwriting,
+          lendpath-document-service,
+          lendpath-credit-service,
+          lendpath-appraisal-service,
+          lendpath-closing-service,
+          lendpath-notification-service
+      - name: service.version
+        type: random_string_from_list
+        custom_list: "3.1.0,3.1.1,3.2.0,3.2.1"
+      - name: service.environment
+        value: production
+
+      - name: host.hostname
+        type: random_string_from_list
+        custom_list: "los-app-01,los-app-02,los-app-03,uw-app-01,uw-app-02,doc-svc-01,credit-svc-01"
+      - name: host.name
+        type: random_string_from_list
+        custom_list: "los-app-01,los-app-02,los-app-03,uw-app-01,uw-app-02,doc-svc-01,credit-svc-01"
+
+      # ── JVM / runtime metrics ─────────────────────────────────────────────────
+      - name: jvm.memory.heap.used.bytes
+        type: long
+        range: "104857600,2147483648"    # 100 MB – 2 GB
+      - name: jvm.memory.heap.max.bytes
+        type: long
+        range: "2147483648,4294967296"   # 2 – 4 GB
+      - name: jvm.memory.heap.percent
+        type: float
+        range: "20,95"
+      - name: jvm.gc.collection.time_ms
+        type: long
+        range: "0,800"
+      - name: jvm.gc.collection.count
+        type: long
+        range: "0,50"
+      - name: jvm.threads.count
+        type: int
+        range: "20,500"
+
+      # ── HTTP server metrics ───────────────────────────────────────────────────
+      - name: http.server.requests.count
+        type: long
+        range: "100,10000"
+      - name: http.server.requests.error_count
+        type: long
+        range: "0,200"
+      - name: http.server.requests.latency.p50_ms
+        type: float
+        range: "10,500"
+      - name: http.server.requests.latency.p95_ms
+        type: float
+        range: "100,5000"
+      - name: http.server.requests.latency.p99_ms
+        type: float
+        range: "500,15000"
+
+      # ── DB connection pool ────────────────────────────────────────────────────
+      - name: db.pool.active_connections
+        type: int
+        range: "0,50"
+      - name: db.pool.idle_connections
+        type: int
+        range: "0,50"
+      - name: db.pool.max_connections
+        type: int
+        range: "50,50"              # fixed pool size
+      - name: db.pool.wait_count
+        type: int
+        range: "0,20"
+      - name: db.pool.timeout_count
+        type: int
+        range: "0,5"
+
+      # ── business throughput ───────────────────────────────────────────────────
+      - name: mortgage.metrics.applications_per_min
+        type: float
+        range: "0.5,25.0"
+      - name: mortgage.metrics.decisions_per_min
+        type: float
+        range: "0.1,10.0"
+      - name: mortgage.metrics.queue_depth
+        type: int
+        range: "0,500"
+      - name: mortgage.metrics.avg_processing_time_sec
+        type: float
+        range: "5,300"
+
+      - name: tags
+        value: mortgage-services
+
+
+
+  # ===========================================================================
+  # 6. APM TRACES  → traces-apm-mortgage
+  #
+  #    NOTE: This data stream is NOT generated by the SDG.
+  #          Use apm_trace_generator.py instead, which produces properly
+  #          linked trace trees where span.parent.id references a real
+  #          transaction.id in the same trace — required for the APM
+  #          Service Map and Trace Waterfall to work correctly.
+  #
+  #    The SDG cannot produce linked traces because it generates each
+  #    document independently with random IDs.
+  #
+  #    Run alongside the SDG:
+  #      python run_workshop.py --host ... --user ... --password ...
+  #
+  #    Or standalone:
+  #      python apm_trace_generator.py --host ... --user ... --password ...
+  # ===========================================================================
+
+  # ===========================================================================
+  # 7. AUDIT / SECURITY LOGS  → logs-mortgage.audit-default
+  #    ML techniques: Rare detector, Classification (DFA)
+  #    Authentication, authorization, and sensitive data access events.
+  #    Rich categorical fields make this ideal for rare analysis and
+  #    classification of legitimate vs. suspicious sessions.
+  # ===========================================================================
+  - indexName: logs-mortgage.audit-default
+    dataStream: true
+    purgeOnStart: false
+    workloadThreads: 1
+    workloadSleep: 300
+    elasticsearchBulkQueueDepth: 15
+
+    fields:
+      - name: "@timestamp"
+        type: timestamp
+        range: "0,2"
+
+      - name: ecs.version
+        value: "8.11.0"
+
+      - name: data_stream.type
+        value: logs
+      - name: data_stream.dataset
+        value: mortgage.audit
+      - name: data_stream.namespace
+        value: default
+
+      - name: event.kind
+        value: event
+      - name: event.category
+        type: random_string_from_list
+        custom_list: "authentication,authentication,authentication,authorization,iam,file,database,network"
+      - name: event.type
+        type: random_string_from_list
+        custom_list: "start,end,change,access,creation,deletion,info"
+      - name: event.action
+        type: random_string_from_list
+        custom_list: >
+          user_login,
+          user_login,
+          user_login,
+          user_logout,
+          user_login_failed,
+          mfa_challenge,
+          mfa_success,
+          mfa_failed,
+          password_reset,
+          account_locked,
+          permission_granted,
+          permission_denied,
+          document_accessed,
+          document_downloaded,
+          document_deleted,
+          ssn_accessed,
+          credit_report_accessed,
+          rate_overridden,
+          fee_waived,
+          admin_impersonation,
+          bulk_export,
+          api_key_created,
+          api_key_revoked,
+          config_changed,
+          loan_amount_modified
+      - name: event.outcome
+        type: random_string_from_list
+        custom_list: "success,success,success,success,failure,failure,unknown"
+      - name: event.dataset
+        value: mortgage.audit
+
+      # ── actor ─────────────────────────────────────────────────────────────────
+      - name: user.id
+        type: random_string_from_list
+        custom_list: "LO-001,LO-002,LO-003,LO-004,LO-005,LO-006,LO-007,LO-008,LO-009,LO-010,PROC-01,PROC-02,UW-01,UW-02,UW-03,ADMIN-01,SYS-BOT"
+      - name: user.name
+        type: full_name
+      - name: user.email
+        type: email
+      - name: user.roles
+        type: random_string_from_list
+        custom_list: "loan_officer,loan_officer,loan_officer,processor,underwriter,admin,system,compliance"
+      - name: user.full_name
+        type: full_name
+
+      # ── source location ───────────────────────────────────────────────────────
+      - name: source.ip
+        type: ipv4
+      - name: source.geo.location
+        type: geo_point
+      - name: source.geo.country_iso_code
+        type: random_string_from_list
+        custom_list: "US,US,US,US,US,US,US,US,US,US,US,US,CA,MX,CN,NG,RU"
+      - name: source.geo.city_name
+        type: city
+      - name: source.geo.region_name
+        type: state
+
+      # ── target resource ───────────────────────────────────────────────────────
+      - name: file.name
+        type: random_string_from_list
+        custom_list: >
+          credit_report.pdf,
+          1003_application.pdf,
+          closing_disclosure.pdf,
+          title_commitment.pdf,
+          appraisal_report.pdf,
+          borrower_ssn_data.json,
+          income_verification.pdf,
+          bank_statements.pdf,
+          tax_returns.pdf,
+          loan_estimate.pdf
+
+      - name: database.instance
+        type: random_string_from_list
+        custom_list: "lendpath-prod-db,lendpath-prod-db-replica,lendpath-archive-db"
+
+      # ── outcome classification target (for DFA classification) ────────────────
+      - name: audit.risk_score
+        type: float
+        range: "0,100"
+      - name: audit.is_suspicious
+        type: random_string_from_list
+        custom_list: "false,false,false,false,false,false,false,false,false,true"  # 10% suspicious
+      - name: audit.session_id
+        type: uuid
+      - name: audit.mfa_used
+        type: boolean
+      - name: audit.off_hours
+        type: boolean
+      - name: audit.new_device
+        type: boolean
+      - name: audit.vpn_detected
+        type: boolean
+
+      # ── host ──────────────────────────────────────────────────────────────────
+      - name: host.hostname
+        type: random_string_from_list
+        custom_list: "audit-svc-01,audit-svc-02"
+      - name: host.name
+        type: random_string_from_list
+        custom_list: "audit-svc-01,audit-svc-02"
+
+      - name: message
+        type: random_string_from_list
+        custom_list: >
+          "Successful user authentication",
+          "Failed authentication attempt",
+          "MFA challenge issued",
+          "MFA verification successful",
+          "MFA verification failed",
+          "Account locked due to excessive failed attempts",
+          "Sensitive document accessed",
+          "SSN field accessed in loan application",
+          "Credit report retrieved from bureau",
+          "Rate override applied by loan officer",
+          "Fee waiver applied",
+          "Bulk data export initiated",
+          "API key generated",
+          "Administrative impersonation session started",
+          "Loan amount modified post-submission",
+          "Configuration parameter changed",
+          "Compliance audit log queried"
+
+      - name: tags
+        value: mortgage-audit
+
+
+  # ===========================================================================
+  # 8. HOST SYSTEM METRICS  → metrics-mortgage.hosts-default
+  #    ML techniques: Population analysis (split by host), Regression (DFA)
+  #    System-level CPU, memory, disk, network per host —
+  #    population jobs reveal which hosts are outliers vs the peer group.
+  # ===========================================================================
+  - indexName: metrics-mortgage.hosts-default
+    dataStream: true
+    purgeOnStart: false
+    workloadThreads: 2
+    workloadSleep: 60000        # 60 s polling interval
+    elasticsearchBulkQueueDepth: 10
+
+    fields:
+      - name: "@timestamp"
+        type: timestamp
+        range: "0,0"
+
+      - name: ecs.version
+        value: "8.11.0"
+
+      - name: data_stream.type
+        value: metrics
+      - name: data_stream.dataset
+        value: mortgage.hosts
+      - name: data_stream.namespace
+        value: default
+
+      - name: event.kind
+        value: metric
+      - name: event.dataset
+        value: mortgage.hosts
+      - name: event.module
+        value: system
+
+      - name: agent.type
+        value: metricbeat
+      - name: agent.version
+        value: "8.13.0"
+
+      # ── host (split dimension for population jobs) ────────────────────────────
+      - name: host.hostname
+        type: random_string_from_list
+        custom_list: >
+          nginx-gw-01,nginx-gw-02,nginx-gw-03,
+          los-app-01,los-app-02,los-app-03,
+          uw-app-01,uw-app-02,
+          doc-svc-01,credit-svc-01,
+          db-primary-01,db-replica-01,db-replica-02,
+          cache-redis-01,cache-redis-02,
+          mq-kafka-01,mq-kafka-02,mq-kafka-03
+      - name: host.name
+        type: random_string_from_list
+        custom_list: >
+          nginx-gw-01,nginx-gw-02,nginx-gw-03,
+          los-app-01,los-app-02,los-app-03,
+          uw-app-01,uw-app-02,
+          doc-svc-01,credit-svc-01,
+          db-primary-01,db-replica-01,db-replica-02,
+          cache-redis-01,cache-redis-02,
+          mq-kafka-01,mq-kafka-02,mq-kafka-03
+      - name: host.type
+        type: random_string_from_list
+        custom_list: "web,web,web,app,app,app,app,app,app,app,database,database,database,cache,cache,messaging,messaging,messaging"
+      - name: host.os.type
+        value: linux
+      - name: host.os.name
+        value: Ubuntu
+      - name: host.os.version
+        value: "22.04.3 LTS"
+      - name: host.architecture
+        value: x86_64
+
+      # ── CPU ───────────────────────────────────────────────────────────────────
+      - name: system.cpu.total.pct
+        type: float
+        range: "0.02,0.98"
+      - name: system.cpu.user.pct
+        type: float
+        range: "0.01,0.70"
+      - name: system.cpu.system.pct
+        type: float
+        range: "0.005,0.25"
+      - name: system.cpu.iowait.pct
+        type: float
+        range: "0,0.30"
+      - name: system.cpu.cores
+        type: int
+        range: "4,64"
+
+      # ── memory ────────────────────────────────────────────────────────────────
+      - name: system.memory.total
+        type: long
+        range: "8589934592,137438953472"    # 8 – 128 GB
+      - name: system.memory.used.bytes
+        type: long
+        range: "1073741824,68719476736"     # 1 – 64 GB
+      - name: system.memory.used.pct
+        type: float
+        range: "0.10,0.95"
+      - name: system.memory.free
+        type: long
+        range: "536870912,32212254720"
+
+      # ── disk ──────────────────────────────────────────────────────────────────
+      - name: system.filesystem.used.pct
+        type: float
+        range: "0.10,0.90"
+      - name: system.diskio.read.bytes
+        type: long
+        range: "0,1073741824"
+      - name: system.diskio.write.bytes
+        type: long
+        range: "0,2147483648"
+
+      # ── network ───────────────────────────────────────────────────────────────
+      - name: system.network.in.bytes
+        type: long
+        range: "0,1073741824"
+      - name: system.network.out.bytes
+        type: long
+        range: "0,536870912"
+      - name: system.network.in.errors
+        type: int
+        range: "0,100"
+      - name: system.network.out.errors
+        type: int
+        range: "0,50"
+
+      # ── load ──────────────────────────────────────────────────────────────────
+      - name: system.load.1
+        type: float
+        range: "0.0,16.0"
+      - name: system.load.5
+        type: float
+        range: "0.0,12.0"
+      - name: system.load.15
+        type: float
+        range: "0.0,8.0"
+      - name: system.load.cores
+        type: int
+        range: "4,64"
+
+      # ── regression target (DFA) ───────────────────────────────────────────────
+      # host.memory_pressure_score is a composite (0–100) for regression
+      - name: mortgage.host.memory_pressure_score
+        type: float
+        range: "0,100"
+      - name: mortgage.host.incident_count
+        type: int
+        range: "0,10"
+      - name: mortgage.host.role
+        type: random_string_from_list
+        custom_list: "web,app,database,cache,messaging"
+
+      - name: tags
+        value: mortgage-hosts
+
+  # ===========================================================================
+  # 9. AKAMAI SIEM  → logs-akamai.siem-mortgage
+  #    Integration: akamai (data_stream/siem)
+  #    ML techniques: Log Rate Analysis, Rare (bot scores, rule tags, attack types),
+  #                   Outlier Detection (DFA) — bot score + user risk score + rule count
+  #    Captures Akamai Edge WAF/bot-detection events hitting the LendPath
+  #    mortgage portal. High bot scores against /apply and /credit paths are
+  #    prime outlier candidates.
+  # ===========================================================================
+  - indexName: logs-akamai.siem-mortgage
+    dataStream: true
+    purgeOnStart: false
+    workloadThreads: 1
+    workloadSleep: 400
+    elasticsearchBulkQueueDepth: 20
+
+    fields:
+      - name: "@timestamp"
+        type: timestamp
+        range: "0,2"
+
+      - name: ecs.version
+        value: "8.11.0"
+
+      - name: data_stream.type
+        value: logs
+      - name: data_stream.dataset
+        value: akamai.siem
+      - name: data_stream.namespace
+        value: mortgage
+
+      - name: event.kind
+        value: event
+      - name: event.category
+        value: network
+      - name: event.dataset
+        value: akamai.siem
+      - name: event.outcome
+        type: random_string_from_list
+        custom_list: "success,success,success,failure,failure"
+
+      - name: observer.type
+        value: proxy
+      - name: observer.vendor
+        value: akamai
+
+      - name: network.protocol
+        value: http
+      - name: network.transport
+        value: tcp
+
+      - name: tls.version
+        type: random_string_from_list
+        custom_list: "1.2,1.2,1.3,1.3,1.3"
+      - name: tls.version_protocol
+        value: tls
+
+      - name: http.version
+        type: random_string_from_list
+        custom_list: "1.1,1.1,2,2"
+
+      - name: source.ip
+        type: ipv4
+      - name: source.address
+        type: ipv4
+      - name: source.geo.location
+        type: geo_point
+      - name: source.geo.country_iso_code
+        type: random_string_from_list
+        custom_list: "US,US,US,US,US,US,CA,MX,CN,RU,NG,BR,IN,US,US"
+
+      - name: client.ip
+        type: ipv4
+      - name: client.address
+        type: ipv4
+
+      - name: url.domain
+        value: "apply.lendpath.com"
+      - name: url.path
+        type: random_string_from_list
+        custom_list: >
+          /apply,
+          /apply/step1,
+          /apply/step2,
+          /apply/credit-check,
+          /rates,
+          /rates/lock,
+          /documents/upload,
+          /account/login,
+          /account/password-reset,
+          /api/v1/applications/submit,
+          /api/v1/credit/check,
+          /api/v1/rates/current,
+          /admin/reports,
+          /admin/users
+      - name: url.port
+        value: 443
+
+      # Akamai-specific SIEM fields
+      - name: akamai.siem.config_id
+        type: random_string_from_list
+        custom_list: "6724,6725,6726"
+      - name: akamai.siem.policy_id
+        type: random_string_from_list
+        custom_list: "scoe_5426,scoe_5427,scoe_mortgage_01"
+
+      - name: akamai.siem.bot.score
+        type: int
+        range: "0,100"
+      - name: akamai.siem.bot.response_segment
+        type: int
+        range: "0,5"
+
+      - name: akamai.siem.user_risk.score
+        type: int
+        range: "0,100"
+      - name: akamai.siem.user_risk.status
+        type: int
+        range: "0,3"
+      - name: akamai.siem.user_risk.trust.ugp
+        type: random_string_from_list
+        custom_list: "US,US,US,US,US,CA,MX,CN,RU,NG"
+
+      - name: akamai.siem.rule_actions
+        type: random_string_from_list
+        custom_list: "alert,alert,alert,deny,deny,allow"
+      - name: akamai.siem.rule_tags
+        type: random_string_from_list
+        custom_list: >
+          web_attack/xss,
+          web_attack/sql_injection,
+          web_attack/rfi,
+          automation/misc,
+          automation/bot,
+          automation/scanner,
+          reputation/tor_exit,
+          reputation/proxy,
+          dos/slowloris,
+          credential_abuse/brute_force
+
+      - name: tags
+        value: akamai-siem
+
+
+  # ===========================================================================
+  # 10. AWS VPC FLOW LOGS  → logs-aws.vpcflow-mortgage
+  #     Integration: aws / aws_vpcflow_otel (OTel assets package)
+  #     ML techniques: Multi-Metric (no split) on network bytes/packets,
+  #                    Rare (unexpected source IPs, rejected traffic spikes)
+  #     Network flow telemetry for the LendPath AWS VPC. REJECT actions against
+  #     DB subnets are high-signal security anomalies.
+  # ===========================================================================
+  - indexName: logs-aws.vpcflow-mortgage
+    dataStream: true
+    purgeOnStart: false
+    workloadThreads: 2
+    workloadSleep: 80
+    elasticsearchBulkQueueDepth: 50
+
+    fields:
+      - name: "@timestamp"
+        type: timestamp
+        range: "0,1"
+
+      - name: ecs.version
+        value: "8.11.0"
+
+      - name: data_stream.type
+        value: logs
+      - name: data_stream.dataset
+        value: aws.vpcflow
+      - name: data_stream.namespace
+        value: mortgage
+
+      - name: event.kind
+        value: event
+      - name: event.category
+        value: network
+      - name: event.dataset
+        value: aws.vpcflow
+      - name: event.action
+        type: random_string_from_list
+        custom_list: "ACCEPT,ACCEPT,ACCEPT,ACCEPT,ACCEPT,ACCEPT,REJECT,REJECT,NODATA,SKIPDATA"
+      - name: event.outcome
+        type: random_string_from_list
+        custom_list: "success,success,success,success,failure"
+      - name: event.type
+        type: random_string_from_list
+        custom_list: "connection,connection,connection,denied"
+
+      - name: cloud.provider
+        value: aws
+      - name: cloud.region
+        type: random_string_from_list
+        custom_list: "us-east-1,us-east-1,us-east-1,us-west-2,us-east-2"
+      - name: cloud.availability_zone
+        type: random_string_from_list
+        custom_list: "us-east-1a,us-east-1b,us-east-1c,us-west-2a,us-east-2a"
+
+      - name: source.ip
+        type: ipv4
+      - name: source.address
+        type: ipv4
+      - name: source.port
+        type: int
+        range: "1024,65535"
+      - name: source.bytes
+        type: long
+        range: "40,1048576"
+      - name: source.packets
+        type: int
+        range: "1,1000"
+
+      - name: destination.ip
+        type: ipv4
+      - name: destination.address
+        type: ipv4
+      - name: destination.port
+        type: random_integer_from_list
+        custom_list: "80,443,1521,5432,6379,9092,9200,22,3306,8080,8443"
+      - name: destination.bytes
+        type: long
+        range: "40,524288"
+
+      - name: network.bytes
+        type: long
+        range: "80,1572864"
+      - name: network.packets
+        type: int
+        range: "1,2000"
+      - name: network.transport
+        type: random_string_from_list
+        custom_list: "tcp,tcp,tcp,tcp,udp"
+      - name: network.type
+        value: ipv4
+      - name: network.iana_number
+        type: random_string_from_list
+        custom_list: "6,6,6,17"
+
+      - name: tags
+        value: aws-vpcflow
+
+
+  # ===========================================================================
+  # 11. AWS WAF LOGS  → logs-aws.waf-mortgage
+  #     Integration: aws / aws_waf_otel (OTel assets package)
+  #     ML techniques: Log Pattern Analysis, Rare (rule IDs, attack patterns),
+  #                    combined with Akamai SIEM for cross-source Rare job
+  #     AWS WAF protecting the LendPath API Gateway and ALB. BLOCK actions
+  #     on SQLi/XSS rules targeting mortgage application endpoints.
+  # ===========================================================================
+  - indexName: logs-aws.waf-mortgage
+    dataStream: true
+    purgeOnStart: false
+    workloadThreads: 1
+    workloadSleep: 300
+    elasticsearchBulkQueueDepth: 20
+
+    fields:
+      - name: "@timestamp"
+        type: timestamp
+        range: "0,2"
+
+      - name: ecs.version
+        value: "8.11.0"
+
+      - name: data_stream.type
+        value: logs
+      - name: data_stream.dataset
+        value: aws.waf
+      - name: data_stream.namespace
+        value: mortgage
+
+      - name: event.kind
+        value: alert
+      - name: event.category
+        value: web
+      - name: event.dataset
+        value: aws.waf
+      - name: event.action
+        type: random_string_from_list
+        custom_list: "ALLOW,ALLOW,ALLOW,ALLOW,BLOCK,BLOCK,COUNT,COUNT"
+      - name: event.type
+        type: random_string_from_list
+        custom_list: "access,denied,allowed"
+
+      - name: cloud.provider
+        value: aws
+      - name: cloud.region
+        type: random_string_from_list
+        custom_list: "us-east-1,us-east-1,us-west-2"
+
+      - name: http.version
+        value: "1.1"
+      - name: network.protocol
+        value: http
+      - name: network.transport
+        value: tcp
+
+      - name: source.ip
+        type: ipv4
+      - name: url.path
+        type: random_string_from_list
+        custom_list: >
+          /api/v1/applications/submit,
+          /api/v1/credit/check,
+          /api/v1/rates/lock,
+          /api/v1/documents/upload,
+          /api/v1/underwriting/decision,
+          /login,
+          /admin/reports,
+          /api/v1/admin/users
+
+      - name: rule.id
+        type: random_string_from_list
+        custom_list: >
+          AWSManagedRulesCommonRuleSet,
+          AWSManagedRulesSQLiRuleSet,
+          AWSManagedRulesKnownBadInputsRuleSet,
+          STMTest_SQLi_XSS,
+          RateLimit_LoginEndpoint,
+          RateLimit_ApiEndpoint,
+          IPReputation_Block,
+          GeoMatch_Block_HighRisk
+      - name: rule.ruleset
+        type: random_string_from_list
+        custom_list: "REGULAR,REGULAR,REGULAR,RATE_BASED,GROUP"
+
+      - name: aws.waf.arn
+        type: random_string_from_list
+        custom_list: >
+          arn:aws:wafv2:us-east-1:123456789:regional/webacl/lendpath-api-waf/abc123,
+          arn:aws:wafv2:us-east-1:123456789:regional/webacl/lendpath-portal-waf/def456
+      - name: aws.waf.format_version
+        value: "1"
+
+      # WAF terminating rule match details — key for rare + pattern analysis
+      - name: aws.waf.request.headers.User-Agent
+        type: random_string_from_list
+        custom_list: >
+          Mozilla/5.0 Chrome/120.0.0.0,
+          python-requests/2.31.0,
+          sqlmap/1.7,
+          curl/7.88.1,
+          Nikto/2.1.6,
+          LendPath-App/3.2.1,
+          Go-http-client/2.0,
+          axios/1.6.2
+
+      - name: tags
+        value: aws-waf
+
+
+  # ===========================================================================
+  # 12. COREDNS QUERY LOGS  → logs-coredns.log-mortgage
+  #     Integration: coredns (data_stream/log)
+  #     ML techniques: Rare (unusual query types, NXDOMAINs, external DNS lookups),
+  #                    combined with AWS VPC Flow for correlated network rare job
+  #     Kubernetes CoreDNS inside the LendPath EKS cluster. DNS exfiltration
+  #     (high NXDOMAIN rates, unusual TXT lookups) and data-exfil tunneling
+  #     are detectable via rare analysis.
+  # ===========================================================================
+  - indexName: logs-coredns.log-mortgage
+    dataStream: true
+    purgeOnStart: false
+    workloadThreads: 1
+    workloadSleep: 150
+    elasticsearchBulkQueueDepth: 40
+
+    fields:
+      - name: "@timestamp"
+        type: timestamp
+        range: "0,1"
+
+      - name: ecs.version
+        value: "8.11.0"
+
+      - name: data_stream.type
+        value: logs
+      - name: data_stream.dataset
+        value: coredns.log
+      - name: data_stream.namespace
+        value: mortgage
+
+      - name: event.kind
+        value: event
+      - name: event.category
+        value: network
+      - name: event.dataset
+        value: coredns.log
+      - name: event.module
+        value: coredns
+      - name: event.outcome
+        type: random_string_from_list
+        custom_list: "success,success,success,success,failure"
+      - name: event.duration
+        type: long
+        range: "100000,500000000"    # 0.1ms – 500ms in nanoseconds
+
+      - name: dns.question.type
+        type: random_string_from_list
+        custom_list: "A,A,A,A,A,A,AAAA,AAAA,CNAME,MX,TXT,TXT,PTR,SRV,NS"
+      - name: dns.question.class
+        value: IN
+      - name: dns.question.name
+        type: random_string_from_list
+        custom_list: >
+          lendpath-los.lendpath.svc.cluster.local,
+          lendpath-underwriting.lendpath.svc.cluster.local,
+          lendpath-credit-service.lendpath.svc.cluster.local,
+          kafka.lendpath.svc.cluster.local,
+          oracle-db.lendpath.svc.cluster.local,
+          redis.lendpath.svc.cluster.local,
+          api.lendpath.com,
+          apply.lendpath.com,
+          bureau-api.experian.com,
+          bureau-api.equifax.com,
+          fha.hud.gov,
+          va.gov,
+          fanniemae.com,
+          freddiemac.com,
+          unknown-external-host.xyz,
+          data-exfil.suspicious-domain.cc
+      - name: dns.question.registered_domain
+        type: random_string_from_list
+        custom_list: "lendpath.com,experian.com,equifax.com,hud.gov,fanniemae.com,suspicious-domain.cc"
+      - name: dns.response_code
+        type: random_string_from_list
+        custom_list: "NOERROR,NOERROR,NOERROR,NOERROR,NOERROR,NXDOMAIN,NXDOMAIN,SERVFAIL,REFUSED"
+      - name: dns.header_flags
+        type: random_string_from_list
+        custom_list: "RD,RD RA,RD RA,QR RD RA"
+      - name: dns.id
+        type: int
+        range: "1,65535"
+
+      - name: source.ip
+        type: ipv4
+      - name: source.port
+        type: int
+        range: "1024,65535"
+
+      - name: destination.bytes
+        type: int
+        range: "40,1024"
+
+      - name: coredns.log.buffer_size
+        type: int
+        range: "512,4096"
+      - name: coredns.log.dnssec_ok
+        type: boolean
+
+      - name: tags
+        value: coredns-log
+
+
+  # ===========================================================================
+  # 13. HAPROXY ACCESS LOGS  → logs-haproxy.log-mortgage
+  #     Integration: haproxy (data_stream/log)
+  #     ML techniques: Multi-Metric with split (by haproxy.backend_name),
+  #                    Log Rate Analysis, Log Pattern Analysis
+  #     HAProxy is the internal L7 load balancer routing between LendPath
+  #     microservices. Per-backend anomalies (queue depth, connection wait,
+  #     response time) are the key ML signals.
+  # ===========================================================================
+  - indexName: logs-haproxy.log-mortgage
+    dataStream: true
+    purgeOnStart: false
+    workloadThreads: 2
+    workloadSleep: 100
+    elasticsearchBulkQueueDepth: 40
+    peakTime: "10:00:00"
+
+    fields:
+      - name: "@timestamp"
+        type: timestamp
+        range: "0,1"
+
+      - name: ecs.version
+        value: "8.11.0"
+
+      - name: data_stream.type
+        value: logs
+      - name: data_stream.dataset
+        value: haproxy.log
+      - name: data_stream.namespace
+        value: mortgage
+
+      - name: event.kind
+        value: event
+      - name: event.category
+        value: web
+      - name: event.dataset
+        value: haproxy.log
+      - name: event.outcome
+        type: random_string_from_list
+        custom_list: "success,success,success,failure"
+      - name: event.duration
+        type: long
+        range: "500000,8000000000"    # 0.5ms – 8s
+
+      - name: haproxy.frontend_name
+        type: random_string_from_list
+        custom_list: "incoming~,internal~,admin~"
+      - name: haproxy.backend_name
+        type: random_string_from_list
+        custom_list: >
+          los_microservice,
+          underwriting_microservice,
+          document_microservice,
+          credit_microservice,
+          appraisal_microservice,
+          closing_microservice,
+          notification_microservice
+      - name: haproxy.backend_queue
+        type: int
+        range: "0,100"
+      - name: haproxy.bytes_read
+        type: long
+        range: "128,524288"
+
+      - name: haproxy.connection_wait_time_ms
+        type: int
+        range: "0,2000"
+      - name: haproxy.connections.active
+        type: int
+        range: "1,500"
+      - name: haproxy.connections.backend
+        type: int
+        range: "0,200"
+      - name: haproxy.connections.frontend
+        type: int
+        range: "1,500"
+      - name: haproxy.connections.retries
+        type: int
+        range: "0,10"
+      - name: haproxy.connections.server
+        type: int
+        range: "0,200"
+
+      - name: haproxy.http.request.raw_request_line
+        type: random_string_from_list
+        custom_list: >
+          "GET /api/v1/applications HTTP/1.1",
+          "POST /api/v1/applications/submit HTTP/1.1",
+          "GET /api/v1/rates/current HTTP/1.1",
+          "POST /api/v1/credit/check HTTP/1.1",
+          "POST /api/v1/documents/upload HTTP/1.1",
+          "GET /api/v1/underwriting/queue HTTP/1.1",
+          "POST /api/v1/underwriting/decision HTTP/1.1",
+          "GET /api/v1/closing/schedule HTTP/1.1",
+          "GET /health HTTP/1.1"
+      - name: haproxy.http.request.time_wait_ms
+        type: int
+        range: "0,500"
+      - name: haproxy.http.request.time_wait_without_data_ms
+        type: int
+        range: "0,200"
+
+      - name: haproxy.server_name
+        type: random_string_from_list
+        custom_list: "los-app-01,los-app-02,los-app-03,uw-app-01,uw-app-02,doc-svc-01,credit-svc-01"
+      - name: haproxy.server_queue
+        type: int
+        range: "0,50"
+      - name: haproxy.total_waiting_time_ms
+        type: int
+        range: "0,3000"
+
+      - name: http.response.status_code
+        type: random_integer_from_list
+        custom_list: "200,200,200,200,201,301,400,401,403,404,429,500,502,503"
+      - name: http.request.method
+        type: random_string_from_list
+        custom_list: "GET,GET,GET,POST,POST,PUT,DELETE"
+
+      - name: source.ip
+        type: ipv4
+      - name: source.address
+        type: ipv4
+      - name: source.port
+        type: int
+        range: "1024,65535"
+
+      - name: tags
+        value: haproxy-log
+
+
+  # ===========================================================================
+  # 14. HAPROXY STAT METRICS  → metrics-haproxy.stat-mortgage
+  #     Integration: haproxy (data_stream/stat)
+  #     ML techniques: Population analysis (split by haproxy.stat.proxy.name)
+  #                    compares backend pools against each other as peers
+  # ===========================================================================
+  - indexName: metrics-haproxy.stat-mortgage
+    dataStream: true
+    purgeOnStart: false
+    workloadThreads: 1
+    workloadSleep: 30000
+    elasticsearchBulkQueueDepth: 7   # one per backend
+
+    fields:
+      - name: "@timestamp"
+        type: timestamp
+        range: "0,0"
+
+      - name: ecs.version
+        value: "8.11.0"
+
+      - name: data_stream.type
+        value: metrics
+      - name: data_stream.dataset
+        value: haproxy.stat
+      - name: data_stream.namespace
+        value: mortgage
+
+      - name: event.dataset
+        value: haproxy.stat
+      - name: event.module
+        value: haproxy
+      - name: event.duration
+        type: long
+        range: "50000,5000000"
+
+      - name: agent.type
+        value: metricbeat
+      - name: agent.version
+        value: "8.13.0"
+
+      - name: host.name
+        type: random_string_from_list
+        custom_list: "haproxy-01,haproxy-02"
+
+      - name: haproxy.stat.proxy.name
+        type: random_string_from_list
+        custom_list: >
+          los_microservice,
+          underwriting_microservice,
+          document_microservice,
+          credit_microservice,
+          appraisal_microservice,
+          closing_microservice,
+          notification_microservice
+      - name: haproxy.stat.proxy.id
+        type: int
+        range: "1,10"
+      - name: haproxy.stat.service_name
+        type: random_string_from_list
+        custom_list: "FRONTEND,BACKEND,los-app-01,los-app-02,uw-app-01"
+      - name: haproxy.stat.component_type
+        type: int
+        range: "0,2"
+
+      - name: haproxy.stat.in.bytes
+        type: long
+        range: "0,1073741824"
+      - name: haproxy.stat.out.bytes
+        type: long
+        range: "0,536870912"
+
+      - name: haproxy.stat.request.total
+        type: long
+        range: "0,100000"
+      - name: haproxy.stat.request.errors
+        type: int
+        range: "0,500"
+      - name: haproxy.stat.request.denied
+        type: int
+        range: "0,200"
+      - name: haproxy.stat.request.rate.value
+        type: int
+        range: "0,1000"
+      - name: haproxy.stat.request.rate.max
+        type: int
+        range: "0,2000"
+
+      - name: haproxy.stat.response.http.1xx
+        type: int
+        range: "0,10"
+      - name: haproxy.stat.response.http.2xx
+        type: long
+        range: "0,90000"
+      - name: haproxy.stat.response.http.3xx
+        type: int
+        range: "0,5000"
+      - name: haproxy.stat.response.http.4xx
+        type: int
+        range: "0,2000"
+      - name: haproxy.stat.response.http.5xx
+        type: int
+        range: "0,500"
+
+      - name: haproxy.stat.session.current
+        type: int
+        range: "0,300"
+      - name: haproxy.stat.session.max
+        type: int
+        range: "0,500"
+      - name: haproxy.stat.session.limit
+        type: int
+        range: "500,500"
+      - name: haproxy.stat.connection.total
+        type: long
+        range: "0,1000000"
+
+      - name: tags
+        value: haproxy-stat
+
+
+  # ===========================================================================
+  # 15. HAPROXY INFO METRICS  → metrics-haproxy.info-mortgage
+  #     Integration: haproxy (data_stream/info)
+  #     ML techniques: Single Metric (haproxy.info.connection.current),
+  #                    feeds into cross-source Multi-Metric with nginx stubstatus
+  # ===========================================================================
+  - indexName: metrics-haproxy.info-mortgage
+    dataStream: true
+    purgeOnStart: false
+    workloadThreads: 1
+    workloadSleep: 15000
+    elasticsearchBulkQueueDepth: 2
+
+    fields:
+      - name: "@timestamp"
+        type: timestamp
+        range: "0,0"
+
+      - name: ecs.version
+        value: "8.11.0"
+
+      - name: data_stream.type
+        value: metrics
+      - name: data_stream.dataset
+        value: haproxy.info
+      - name: data_stream.namespace
+        value: mortgage
+
+      - name: event.dataset
+        value: haproxy.info
+      - name: event.module
+        value: haproxy
+
+      - name: agent.type
+        value: metricbeat
+      - name: agent.version
+        value: "8.13.0"
+
+      - name: host.name
+        type: random_string_from_list
+        custom_list: "haproxy-01,haproxy-02"
+
+      - name: haproxy.info.connection.current
+        type: int
+        range: "0,1000"
+      - name: haproxy.info.connection.max
+        type: int
+        range: "1000,4000"
+      - name: haproxy.info.connection.hard_max
+        value: 4000
+      - name: haproxy.info.connection.total
+        type: long
+        range: "0,50000000"
+      - name: haproxy.info.connection.rate.value
+        type: int
+        range: "0,500"
+      - name: haproxy.info.connection.rate.max
+        type: int
+        range: "0,1000"
+      - name: haproxy.info.connection.ssl.current
+        type: int
+        range: "0,800"
+      - name: haproxy.info.connection.ssl.max
+        type: int
+        range: "0,1200"
+      - name: haproxy.info.connection.ssl.total
+        type: long
+        range: "0,40000000"
+
+      - name: haproxy.info.requests.total
+        type: long
+        range: "0,50000000"
+      - name: haproxy.info.idle.pct
+        type: float
+        range: "0.05,1.0"
+      - name: haproxy.info.run_queue
+        type: int
+        range: "0,20"
+      - name: haproxy.info.process_num
+        value: 1
+      - name: haproxy.info.processes
+        value: 1
+      - name: haproxy.info.memory.max.bytes
+        type: long
+        range: "0,2147483648"
+
+      - name: haproxy.info.pipes.free
+        type: int
+        range: "0,100"
+      - name: haproxy.info.pipes.used
+        type: int
+        range: "0,50"
+      - name: haproxy.info.pipes.max
+        type: int
+        range: "50,200"
+
+      - name: tags
+        value: haproxy-info
+
+
+  # ===========================================================================
+  # 16. KAFKA BROKER METRICS  → metrics-kafka.broker-mortgage
+  #     Integration: kafka / kafka_otel (OTel assets package)
+  #     ML techniques: Multi-Metric (with split by kafka.topic.name) — detects
+  #                    per-topic throughput anomalies; underwriting-queue lag
+  #                    spikes are the key LendPath signal
+  # ===========================================================================
+  - indexName: metrics-kafka.broker-mortgage
+    dataStream: true
+    purgeOnStart: false
+    workloadThreads: 1
+    workloadSleep: 10000
+    elasticsearchBulkQueueDepth: 8    # one per topic
+
+    fields:
+      - name: "@timestamp"
+        type: timestamp
+        range: "0,0"
+
+      - name: ecs.version
+        value: "8.11.0"
+
+      - name: data_stream.type
+        value: metrics
+      - name: data_stream.dataset
+        value: kafka.broker
+      - name: data_stream.namespace
+        value: mortgage
+
+      - name: event.dataset
+        value: kafka.broker
+      - name: event.module
+        value: kafka
+      - name: event.duration
+        type: long
+        range: "1000000,50000000"
+
+      - name: agent.type
+        value: metricbeat
+      - name: agent.version
+        value: "8.13.0"
+
+      - name: host.name
+        type: random_string_from_list
+        custom_list: "mq-kafka-01,mq-kafka-02,mq-kafka-03"
+
+      - name: kafka.broker.mbean
+        type: random_string_from_list
+        custom_list: >
+          kafka.server:name=BytesOutPerSec,topic=underwriting-queue,type=BrokerTopicMetrics,
+          kafka.server:name=BytesInPerSec,topic=underwriting-queue,type=BrokerTopicMetrics,
+          kafka.server:name=BytesOutPerSec,topic=decision-results,type=BrokerTopicMetrics,
+          kafka.server:name=BytesInPerSec,topic=decision-results,type=BrokerTopicMetrics,
+          kafka.server:name=BytesOutPerSec,topic=document-events,type=BrokerTopicMetrics,
+          kafka.server:name=BytesOutPerSec,topic=audit-events,type=BrokerTopicMetrics,
+          kafka.server:name=BytesOutPerSec,topic=notification-events,type=BrokerTopicMetrics,
+          kafka.server:name=BytesOutPerSec,topic=credit-check-requests,type=BrokerTopicMetrics
+
+      - name: kafka.topic.name
+        type: random_string_from_list
+        custom_list: >
+          underwriting-queue,
+          underwriting-queue,
+          decision-results,
+          decision-results,
+          document-events,
+          audit-events,
+          notification-events,
+          credit-check-requests
+
+      - name: kafka.broker.topic.net.out.bytes_per_sec
+        type: float
+        range: "0.0,5242880.0"    # 0 – 5 MB/s
+      - name: kafka.broker.topic.net.in.bytes_per_sec
+        type: float
+        range: "0.0,5242880.0"
+
+      - name: tags
+        value: kafka-broker
+
+
+  # ===========================================================================
+  # 17. KAFKA PARTITION METRICS  → metrics-kafka.partition-mortgage
+  #     Integration: kafka / kafka_otel (OTel assets package)
+  #     ML techniques: Population analysis (split by kafka.topic.name) —
+  #                    partitions within the same topic as peers; an imbalanced
+  #                    leader partition is an anomaly relative to its siblings
+  # ===========================================================================
+  - indexName: metrics-kafka.partition-mortgage
+    dataStream: true
+    purgeOnStart: false
+    workloadThreads: 1
+    workloadSleep: 30000
+    elasticsearchBulkQueueDepth: 24   # 8 topics x 3 partitions
+
+    fields:
+      - name: "@timestamp"
+        type: timestamp
+        range: "0,0"
+
+      - name: ecs.version
+        value: "8.11.0"
+
+      - name: data_stream.type
+        value: metrics
+      - name: data_stream.dataset
+        value: kafka.partition
+      - name: data_stream.namespace
+        value: mortgage
+
+      - name: event.dataset
+        value: kafka.partition
+      - name: event.module
+        value: kafka
+
+      - name: agent.type
+        value: metricbeat
+      - name: agent.version
+        value: "8.13.0"
+
+      - name: host.name
+        type: random_string_from_list
+        custom_list: "mq-kafka-01,mq-kafka-02,mq-kafka-03"
+
+      - name: kafka.broker.address
+        type: random_string_from_list
+        custom_list: "mq-kafka-01:9092,mq-kafka-02:9092,mq-kafka-03:9092"
+      - name: kafka.broker.id
+        type: int
+        range: "0,2"
+
+      - name: kafka.topic.name
+        type: random_string_from_list
+        custom_list: >
+          underwriting-queue,
+          underwriting-queue,
+          underwriting-queue,
+          decision-results,
+          decision-results,
+          decision-results,
+          document-events,
+          audit-events,
+          notification-events,
+          credit-check-requests
+
+      - name: kafka.partition.id
+        type: int
+        range: "0,2"
+      - name: kafka.partition.topic_broker_id
+        type: random_string_from_list
+        custom_list: "0-underwriting-queue-0,0-underwriting-queue-1,0-underwriting-queue-2,1-decision-results-0"
+      - name: kafka.partition.topic_id
+        type: random_string_from_list
+        custom_list: "0-underwriting-queue,1-decision-results,2-document-events,3-audit-events"
+
+      - name: kafka.partition.offset.newest
+        type: long
+        range: "0,10000000"
+      - name: kafka.partition.offset.oldest
+        type: long
+        range: "0,1000"
+
+      - name: kafka.partition.partition.insync_replica
+        type: boolean
+      - name: kafka.partition.partition.is_leader
+        type: boolean
+      - name: kafka.partition.partition.leader
+        type: int
+        range: "0,2"
+      - name: kafka.partition.partition.replica
+        type: int
+        range: "0,2"
+
+      - name: tags
+        value: kafka-partition
+
+
+  # ===========================================================================
+  # 18. ORACLE DATABASE AUDIT  → logs-oracle.database_audit-mortgage
+  #     Integration: oracle (data_stream/database_audit)
+  #     ML techniques: Rare (unusual DB actions, privileged user activity,
+  #                    off-hours SYSDBA access); combined with PingOne audit
+  #                    for a cross-source privileged-access rare job
+  # ===========================================================================
+  - indexName: logs-oracle.database_audit-mortgage
+    dataStream: true
+    purgeOnStart: false
+    workloadThreads: 1
+    workloadSleep: 500
+    elasticsearchBulkQueueDepth: 10
+
+    fields:
+      - name: "@timestamp"
+        type: timestamp
+        range: "0,2"
+
+      - name: ecs.version
+        value: "8.11.0"
+
+      - name: data_stream.type
+        value: logs
+      - name: data_stream.dataset
+        value: oracle.database_audit
+      - name: data_stream.namespace
+        value: mortgage
+
+      - name: event.kind
+        value: event
+      - name: event.category
+        value: database
+      - name: event.action
+        value: database_audit
+      - name: event.dataset
+        value: oracle.database_audit
+      - name: event.outcome
+        type: random_string_from_list
+        custom_list: "success,success,success,success,failure"
+      - name: event.type
+        value: access
+
+      - name: client.user.name
+        type: random_string_from_list
+        custom_list: "oracle,lendpath_app,lendpath_ro,lendpath_batch,dba_admin,sys,system,auditor"
+
+      - name: user.roles
+        type: random_string_from_list
+        custom_list: "CONNECT,CONNECT,CONNECT,RESOURCE,DBA,SYSDBA,SYSOPER,SELECT_CATALOG_ROLE"
+
+      - name: server.address
+        type: random_string_from_list
+        custom_list: "db-primary-01.lendpath.internal,db-replica-01.lendpath.internal"
+      - name: server.domain
+        type: random_string_from_list
+        custom_list: "db-primary-01.lendpath.internal,db-replica-01.lendpath.internal"
+
+      - name: process.pid
+        type: int
+        range: "1,65535"
+
+      # Oracle audit-specific fields
+      - name: oracle.database_audit.action
+        type: random_string_from_list
+        custom_list: >
+          LOGON,LOGON,LOGON,LOGOFF,
+          SELECT,SELECT,SELECT,SELECT,
+          INSERT,UPDATE,DELETE,
+          CREATE TABLE,DROP TABLE,ALTER TABLE,
+          CREATE USER,DROP USER,ALTER USER,
+          GRANT,REVOKE,
+          EXECUTE,
+          CREATE OR REPLACE PROCEDURE,
+          AUDIT,NOAUDIT,
+          EXPORT,IMPORT
+      - name: oracle.database_audit.action_number
+        type: int
+        range: "1,300"
+      - name: oracle.database_audit.database.user
+        type: random_string_from_list
+        custom_list: "lendpath_app,lendpath_ro,lendpath_batch,dba_admin,sys,system"
+      - name: oracle.database_audit.entry.id
+        type: long
+        range: "1,9999999"
+      - name: oracle.database_audit.length
+        type: int
+        range: "100,2000"
+      - name: oracle.database_audit.obj.name
+        type: random_string_from_list
+        custom_list: >
+          LOAN_APPLICATIONS,
+          BORROWER_PII,
+          CREDIT_SCORES,
+          INCOME_VERIFICATION,
+          PROPERTY_APPRAISALS,
+          CLOSING_DOCS,
+          AUDIT_LOG,
+          USER_ACCOUNTS,
+          RATE_LOCKS,
+          ESCROW_ACCOUNTS
+      - name: oracle.database_audit.obj.schema
+        type: random_string_from_list
+        custom_list: "LENDPATH,LENDPATH_ARCHIVE,SYS"
+      - name: oracle.database_audit.privilege
+        type: random_string_from_list
+        custom_list: "NOT APPLICABLE,SELECT ANY TABLE,CREATE SESSION,SYSDBA,DBA,CREATE ANY PROCEDURE"
+      - name: oracle.database_audit.result_code
+        type: int
+        range: "0,1500"
+      - name: oracle.database_audit.session_id
+        type: long
+        range: "1,9999999"
+      - name: oracle.database_audit.status
+        type: random_string_from_list
+        custom_list: "Success,Success,Success,Failure"
+      - name: oracle.database_audit.terminal
+        type: random_string_from_list
+        custom_list: "pts/0,pts/1,UNKNOWN,los-app-01,los-app-02,uw-app-01"
+
+      - name: related.hosts
+        type: random_string_from_list
+        custom_list: "db-primary-01.lendpath.internal,db-replica-01.lendpath.internal"
+
+      - name: tags
+        value: oracle-database_audit
+
+
+  # ===========================================================================
+  # 19. ORACLE SYSMETRIC  → metrics-oracle.sysmetric-mortgage
+  #     Integration: oracle (data_stream/sysmetric)
+  #     ML techniques: Multi-Metric (with split on service.address) across the
+  #                    primary + replica Oracle instances; Regression (DFA)
+  #                    predicting response_time_per_txn from hit ratios
+  # ===========================================================================
+  - indexName: metrics-oracle.sysmetric-mortgage
+    dataStream: true
+    purgeOnStart: false
+    workloadThreads: 1
+    workloadSleep: 60000
+    elasticsearchBulkQueueDepth: 2   # primary + replica
+
+    fields:
+      - name: "@timestamp"
+        type: timestamp
+        range: "0,0"
+
+      - name: ecs.version
+        value: "8.11.0"
+
+      - name: data_stream.type
+        value: metrics
+      - name: data_stream.dataset
+        value: oracle.sysmetric
+      - name: data_stream.namespace
+        value: mortgage
+
+      - name: event.dataset
+        value: oracle.sysmetric
+      - name: event.module
+        value: sql
+      - name: event.duration
+        type: long
+        range: "50000000,200000000"
+
+      - name: agent.type
+        value: metricbeat
+      - name: agent.version
+        value: "8.13.0"
+
+      - name: host.name
+        type: random_string_from_list
+        custom_list: "db-primary-01,db-replica-01"
+      - name: service.address
+        type: random_string_from_list
+        custom_list: "oracle-primary:1521,oracle-replica:1521"
+      - name: service.type
+        value: sql
+      - name: metricset.name
+        value: query
+      - name: metricset.period
+        value: 60000
+
+      # Key Oracle sysmetric fields (subset of the ~100 available)
+      - name: oracle.sysmetric.active_serial_sessions
+        type: int
+        range: "1,50"
+      - name: oracle.sysmetric.average_active_sessions
+        type: float
+        range: "0.1,20.0"
+      - name: oracle.sysmetric.buffer_cache_hit_ratio
+        type: float
+        range: "70.0,99.9"
+      - name: oracle.sysmetric.cpu_usage_per_sec
+        type: float
+        range: "1.0,80.0"
+      - name: oracle.sysmetric.current_logons_count
+        type: int
+        range: "5,200"
+      - name: oracle.sysmetric.current_open_cursors_count
+        type: int
+        range: "10,500"
+      - name: oracle.sysmetric.database_cpu_time_ratio
+        type: float
+        range: "5.0,60.0"
+      - name: oracle.sysmetric.database_time_per_sec
+        type: float
+        range: "10.0,500.0"
+      - name: oracle.sysmetric.database_wait_time_ratio
+        type: float
+        range: "40.0,95.0"
+      - name: oracle.sysmetric.executions_per_sec
+        type: float
+        range: "10.0,2000.0"
+      - name: oracle.sysmetric.hard_parse_count_per_sec
+        type: float
+        range: "0.0,200.0"
+      - name: oracle.sysmetric.host_cpu_utilization_pct
+        type: float
+        range: "2.0,95.0"
+      - name: oracle.sysmetric.io_megabytes_per_second
+        type: float
+        range: "0.1,500.0"
+      - name: oracle.sysmetric.library_cache_hit_ratio
+        type: float
+        range: "60.0,99.9"
+      - name: oracle.sysmetric.logical_reads_per_sec
+        type: float
+        range: "100.0,20000.0"
+      - name: oracle.sysmetric.physical_reads_per_sec
+        type: float
+        range: "0.0,1000.0"
+      - name: oracle.sysmetric.redo_generated_per_sec
+        type: float
+        range: "1000.0,500000.0"
+      - name: oracle.sysmetric.response_time_per_txn
+        type: float
+        range: "5.0,500.0"       # regression target
+      - name: oracle.sysmetric.session_count
+        type: int
+        range: "10,300"
+      - name: oracle.sysmetric.session_limit_pct
+        type: float
+        range: "2.0,80.0"
+      - name: oracle.sysmetric.shared_pool_free_pct
+        type: float
+        range: "5.0,40.0"
+      - name: oracle.sysmetric.sql_service_response_time
+        type: float
+        range: "0.001,2.0"
+      - name: oracle.sysmetric.user_transaction_per_sec
+        type: float
+        range: "0.1,50.0"
+
+      - name: tags
+        value: oracle-sysmetric
+
+
+  # ===========================================================================
+  # 20. ORACLE TABLESPACE  → metrics-oracle.tablespace-mortgage
+  #     Integration: oracle (data_stream/tablespace)
+  #     ML techniques: Change Point Detection (free bytes trending down),
+  #                    Population analysis (tablespaces as peers within an instance)
+  # ===========================================================================
+  - indexName: metrics-oracle.tablespace-mortgage
+    dataStream: true
+    purgeOnStart: false
+    workloadThreads: 1
+    workloadSleep: 300000    # 5-minute collection interval
+    elasticsearchBulkQueueDepth: 8   # one per tablespace
+
+    fields:
+      - name: "@timestamp"
+        type: timestamp
+        range: "0,0"
+
+      - name: ecs.version
+        value: "8.11.0"
+
+      - name: data_stream.type
+        value: metrics
+      - name: data_stream.dataset
+        value: oracle.tablespace
+      - name: data_stream.namespace
+        value: mortgage
+
+      - name: event.dataset
+        value: oracle.tablespace
+      - name: event.module
+        value: sql
+
+      - name: agent.type
+        value: metricbeat
+      - name: agent.version
+        value: "8.13.0"
+
+      - name: host.name
+        type: random_string_from_list
+        custom_list: "db-primary-01,db-replica-01"
+      - name: service.address
+        type: random_string_from_list
+        custom_list: "oracle-primary:1521/LENDPATHDB,oracle-replica:1521/LENDPATHDB"
+      - name: service.type
+        value: sql
+      - name: metricset.name
+        value: query
+      - name: metricset.period
+        value: 300000
+
+      - name: oracle.tablespace.name
+        type: random_string_from_list
+        custom_list: >
+          LENDPATH_DATA,
+          LENDPATH_INDEX,
+          LENDPATH_ARCHIVE,
+          BORROWER_PII,
+          DOCUMENT_STORE,
+          AUDIT_DATA,
+          TEMP,
+          UNDOTBS1
+
+      - name: oracle.tablespace.extended_space.free.bytes
+        type: long
+        range: "104857600,107374182400"    # 100 MB – 100 GB
+      - name: oracle.tablespace.extended_space.total.bytes
+        type: long
+        range: "107374182400,214748364800"  # 100 GB – 200 GB
+
+      - name: tags
+        value: oracle-tablespace
+
+
+  # ===========================================================================
+  # 21. PINGONE AUDIT  → logs-ping_one.audit-mortgage
+  #     Integration: ping_one (data_stream/audit)
+  #     ML techniques: Rare (unusual IAM actions, MFA bypass attempts, new apps),
+  #                    Geo anomaly (lat_long on source.geo.location by user.id);
+  #                    COMBINED with oracle.database_audit in a cross-source
+  #                    privileged-access rare job
+  # ===========================================================================
+  - indexName: logs-ping_one.audit-mortgage
+    dataStream: true
+    purgeOnStart: false
+    workloadThreads: 1
+    workloadSleep: 350
+    elasticsearchBulkQueueDepth: 15
+
+    fields:
+      - name: "@timestamp"
+        type: timestamp
+        range: "0,2"
+
+      - name: ecs.version
+        value: "8.11.0"
+
+      - name: data_stream.type
+        value: logs
+      - name: data_stream.dataset
+        value: ping_one.audit
+      - name: data_stream.namespace
+        value: mortgage
+
+      - name: event.kind
+        value: event
+      - name: event.category
+        type: random_string_from_list
+        custom_list: "iam,iam,iam,authentication,configuration"
+      - name: event.dataset
+        value: ping_one.audit
+      - name: event.action
+        type: random_string_from_list
+        custom_list: >
+          USER.ACCESS_ALLOWED,
+          USER.ACCESS_ALLOWED,
+          USER.ACCESS_ALLOWED,
+          USER.ACCESS_DENIED,
+          USER.AUTHENTICATION.SUCCESS,
+          USER.AUTHENTICATION.SUCCESS,
+          USER.AUTHENTICATION.FAILED,
+          USER.MFA.SUCCESS,
+          USER.MFA.FAILED,
+          USER.MFA.BYPASS,
+          USER.PASSWORD.RESET,
+          USER.ACCOUNT.LOCKED,
+          USER.ACCOUNT.UNLOCKED,
+          USER.ROLE.GRANTED,
+          USER.ROLE.REVOKED,
+          APPLICATION.ACCESS.GRANTED,
+          APPLICATION.ACCESS.REVOKED,
+          FLOW.EXECUTION.SUCCESS,
+          ADMIN.USER.CREATED,
+          ADMIN.USER.DELETED,
+          ADMIN.APPLICATION.CREATED,
+          ADMIN.POLICY.UPDATED,
+          ADMIN.SAML.ASSERTION.CREATED
+      - name: event.outcome
+        type: random_string_from_list
+        custom_list: "success,success,success,failure"
+      - name: event.type
+        type: random_string_from_list
+        custom_list: "user,info,access"
+
+      - name: input.type
+        value: http_endpoint
+
+      - name: user.id
+        type: random_string_from_list
+        custom_list: >
+          lo-001-uuid,lo-002-uuid,lo-003-uuid,lo-004-uuid,lo-005-uuid,
+          lo-006-uuid,lo-007-uuid,lo-008-uuid,lo-009-uuid,lo-010-uuid,
+          proc-01-uuid,proc-02-uuid,
+          uw-01-uuid,uw-02-uuid,uw-03-uuid,
+          admin-01-uuid,sysadmin-uuid
+      - name: user.email
+        type: email
+      - name: user.name
+        type: full_name
+
+      - name: client.user.id
+        type: uuid
+      - name: client.user.name
+        type: random_string_from_list
+        custom_list: >
+          LendPath Portal,
+          LendPath Mobile,
+          LendPath Admin Console,
+          LendPath API,
+          LendPath LOS Integration,
+          ServiceNow Integration,
+          Salesforce Integration
+
+      # Source geo — critical for PingOne geo anomaly job
+      - name: source.ip
+        type: ipv4
+      - name: source.geo.location
+        type: geo_point
+      - name: source.geo.country_iso_code
+        type: random_string_from_list
+        custom_list: "US,US,US,US,US,US,US,US,US,US,US,US,CA,MX,CN,RU,NG"
+      - name: source.geo.city_name
+        type: city
+      - name: source.geo.region_name
+        type: state
+
+      - name: ping_one.audit.action.type
+        type: random_string_from_list
+        custom_list: >
+          USER.ACCESS_ALLOWED,
+          USER.AUTHENTICATION.SUCCESS,
+          USER.AUTHENTICATION.FAILED,
+          USER.MFA.BYPASS,
+          USER.ROLE.GRANTED,
+          ADMIN.USER.CREATED,
+          ADMIN.POLICY.UPDATED,
+          ADMIN.SAML.ASSERTION.CREATED
+
+      - name: ping_one.audit.actors.client.type
+        value: CLIENT
+      - name: ping_one.audit.actors.user.type
+        value: USER
+
+      - name: ping_one.audit.result.status
+        type: random_string_from_list
+        custom_list: "SUCCESS,SUCCESS,SUCCESS,FAILED,FAILED"
+      - name: ping_one.audit.result.description
+        type: random_string_from_list
+        custom_list: >
+          Passed role access control,
+          Authentication successful,
+          MFA verified,
+          Invalid credentials,
+          Account locked,
+          MFA bypass code used,
+          Policy evaluation passed,
+          SAML assertion issued for LendPath Portal
+
+      # Risk signals for classification
+      - name: ping_one.audit.risk.score
+        type: float
+        range: "0,100"
+      - name: ping_one.audit.risk.level
+        type: random_string_from_list
+        custom_list: "LOW,LOW,LOW,LOW,MEDIUM,MEDIUM,HIGH"
+
+      - name: tags
+        value: ping_one-audit

@@ -1,0 +1,1500 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v5.json",
+  "description": "LendPath Mortgage Platform \u2014 APM Service Network Topology (live traffic + errors)",
+  "width": 1920,
+  "height": 1280,
+  "padding": 20,
+  "autosize": "none",
+  "signals": [
+    {
+      "name": "nodeRadius",
+      "value": 36
+    },
+    {
+      "name": "selectedNode",
+      "value": null,
+      "on": [
+        {
+          "events": "symbol:click",
+          "update": "datum.id"
+        },
+        {
+          "events": "view:click[!event.item]",
+          "update": "null"
+        }
+      ]
+    }
+  ],
+  "data": [
+    {
+      "name": "node-defs",
+      "values": [
+        {
+          "id": "lendpath-los",
+          "label": "lendpath-los",
+          "group": "app",
+          "x": 450,
+          "y": 80,
+          "baseColor": "#0077CC"
+        },
+        {
+          "id": "lendpath-underwriting",
+          "label": "lendpath-\nunderwriting",
+          "group": "app",
+          "x": 200,
+          "y": 240,
+          "baseColor": "#0077CC"
+        },
+        {
+          "id": "lendpath-credit-service",
+          "label": "lendpath-\ncredit-service",
+          "group": "app",
+          "x": 460,
+          "y": 240,
+          "baseColor": "#0077CC"
+        },
+        {
+          "id": "lendpath-document-service",
+          "label": "lendpath-\ndocument-svc",
+          "group": "app",
+          "x": 710,
+          "y": 240,
+          "baseColor": "#0077CC"
+        },
+        {
+          "id": "lendpath-appraisal-service",
+          "label": "lendpath-\nappraisal-svc",
+          "group": "app",
+          "x": 880,
+          "y": 390,
+          "baseColor": "#0077CC"
+        },
+        {
+          "id": "oracle:1521",
+          "label": "Oracle DB\n:1521",
+          "group": "db",
+          "x": 200,
+          "y": 440,
+          "baseColor": "#C74B16"
+        },
+        {
+          "id": "kafka:9092",
+          "label": "Kafka\n:9092",
+          "group": "msg",
+          "x": 100,
+          "y": 540,
+          "baseColor": "#7B5EA7"
+        },
+        {
+          "id": "redis:6379",
+          "label": "Redis\n:6379",
+          "group": "cache",
+          "x": 460,
+          "y": 540,
+          "baseColor": "#C0392B"
+        },
+        {
+          "id": "s3.amazonaws.com:443",
+          "label": "AWS S3\n:443",
+          "group": "storage",
+          "x": 710,
+          "y": 440,
+          "baseColor": "#E67E22"
+        },
+        {
+          "id": "api.experian.com:443",
+          "label": "Experian\n:443",
+          "group": "external",
+          "x": 320,
+          "y": 540,
+          "baseColor": "#27AE60"
+        },
+        {
+          "id": "api.equifax.com:443",
+          "label": "Equifax\n:443",
+          "group": "external",
+          "x": 590,
+          "y": 540,
+          "baseColor": "#27AE60"
+        },
+        {
+          "id": "api.corelogic.com:443",
+          "label": "CoreLogic\n:443",
+          "group": "external",
+          "x": 880,
+          "y": 540,
+          "baseColor": "#27AE60"
+        }
+      ]
+    },
+    {
+      "name": "edge-defs",
+      "values": [
+        {
+          "source": "lendpath-los",
+          "target": "lendpath-underwriting",
+          "edgeKey": "lendpath-los|lendpath-underwriting:8080",
+          "label": "HTTP"
+        },
+        {
+          "source": "lendpath-los",
+          "target": "lendpath-credit-service",
+          "edgeKey": "lendpath-los|lendpath-credit-service:8081",
+          "label": "HTTP"
+        },
+        {
+          "source": "lendpath-los",
+          "target": "lendpath-document-service",
+          "edgeKey": "lendpath-los|lendpath-document-service:8082",
+          "label": "HTTP"
+        },
+        {
+          "source": "lendpath-los",
+          "target": "lendpath-appraisal-service",
+          "edgeKey": "lendpath-los|lendpath-appraisal-service:8083",
+          "label": "HTTP"
+        },
+        {
+          "source": "lendpath-los",
+          "target": "oracle:1521",
+          "edgeKey": "lendpath-los|oracle:1521",
+          "label": "SQL"
+        },
+        {
+          "source": "lendpath-los",
+          "target": "redis:6379",
+          "edgeKey": "lendpath-los|redis:6379",
+          "label": "Cache"
+        },
+        {
+          "source": "lendpath-underwriting",
+          "target": "oracle:1521",
+          "edgeKey": "lendpath-underwriting|oracle:1521",
+          "label": "SQL"
+        },
+        {
+          "source": "lendpath-underwriting",
+          "target": "kafka:9092",
+          "edgeKey": "lendpath-underwriting|kafka:9092",
+          "label": "Produce"
+        },
+        {
+          "source": "lendpath-underwriting",
+          "target": "redis:6379",
+          "edgeKey": "lendpath-underwriting|redis:6379",
+          "label": "Cache"
+        },
+        {
+          "source": "lendpath-credit-service",
+          "target": "oracle:1521",
+          "edgeKey": "lendpath-credit-service|oracle:1521",
+          "label": "SQL"
+        },
+        {
+          "source": "lendpath-credit-service",
+          "target": "api.experian.com:443",
+          "edgeKey": "lendpath-credit-service|api.experian.com:443",
+          "label": "HTTP"
+        },
+        {
+          "source": "lendpath-credit-service",
+          "target": "api.equifax.com:443",
+          "edgeKey": "lendpath-credit-service|api.equifax.com:443",
+          "label": "HTTP"
+        },
+        {
+          "source": "lendpath-credit-service",
+          "target": "redis:6379",
+          "edgeKey": "lendpath-credit-service|redis:6379",
+          "label": "Cache"
+        },
+        {
+          "source": "lendpath-document-service",
+          "target": "oracle:1521",
+          "edgeKey": "lendpath-document-service|oracle:1521",
+          "label": "SQL"
+        },
+        {
+          "source": "lendpath-document-service",
+          "target": "s3.amazonaws.com:443",
+          "edgeKey": "lendpath-document-service|s3.amazonaws.com:443",
+          "label": "S3"
+        },
+        {
+          "source": "lendpath-appraisal-service",
+          "target": "oracle:1521",
+          "edgeKey": "lendpath-appraisal-service|oracle:1521",
+          "label": "SQL"
+        },
+        {
+          "source": "lendpath-appraisal-service",
+          "target": "api.corelogic.com:443",
+          "edgeKey": "lendpath-appraisal-service|api.corelogic.com:443",
+          "label": "HTTP"
+        },
+        {
+          "source": "lendpath-appraisal-service",
+          "target": "redis:6379",
+          "edgeKey": "lendpath-appraisal-service|redis:6379",
+          "label": "Cache"
+        }
+      ]
+    },
+    {
+      "name": "service-stats",
+      "url": {
+        "%context%": true,
+        "%timefield%": "@timestamp",
+        "index": "traces-apm-default",
+        "body": {
+          "size": 0,
+          "query": {
+            "bool": {
+              "filter": [
+                {
+                  "term": {
+                    "processor.event": "transaction"
+                  }
+                },
+                {
+                  "range": {
+                    "@timestamp": {
+                      "gte": "now-24h"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "aggs": {
+            "by_service": {
+              "terms": {
+                "field": "service.name",
+                "size": 20
+              },
+              "aggs": {
+                "total": {
+                  "value_count": {
+                    "field": "transaction.id"
+                  }
+                },
+                "errors": {
+                  "filter": {
+                    "term": {
+                      "event.outcome": "failure"
+                    }
+                  },
+                  "aggs": {
+                    "count": {
+                      "value_count": {
+                        "field": "transaction.id"
+                      }
+                    }
+                  }
+                },
+                "avg_duration": {
+                  "avg": {
+                    "field": "transaction.duration.us"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "format": {
+        "property": "aggregations.by_service.buckets"
+      },
+      "transform": [
+        {
+          "type": "formula",
+          "as": "serviceId",
+          "expr": "datum.key"
+        },
+        {
+          "type": "formula",
+          "as": "txnCount",
+          "expr": "datum.doc_count"
+        },
+        {
+          "type": "formula",
+          "as": "errorCount",
+          "expr": "datum.errors.count.value"
+        },
+        {
+          "type": "formula",
+          "as": "errorRate",
+          "expr": "datum.doc_count > 0 ? datum.errors.count.value / datum.doc_count : 0"
+        },
+        {
+          "type": "formula",
+          "as": "avgDurationMs",
+          "expr": "datum.avg_duration.value / 1000"
+        }
+      ]
+    },
+    {
+      "name": "span-stats",
+      "url": {
+        "%context%": true,
+        "%timefield%": "@timestamp",
+        "index": "traces-apm-default",
+        "body": {
+          "size": 0,
+          "query": {
+            "bool": {
+              "filter": [
+                {
+                  "term": {
+                    "processor.event": "span"
+                  }
+                },
+                {
+                  "exists": {
+                    "field": "destination.service.resource"
+                  }
+                },
+                {
+                  "range": {
+                    "@timestamp": {
+                      "gte": "now-24h"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "aggs": {
+            "by_edge": {
+              "terms": {
+                "script": {
+                  "source": "doc['service.name'].value + '|' + doc['destination.service.resource'].value",
+                  "lang": "painless"
+                },
+                "size": 100
+              },
+              "aggs": {
+                "span_errors": {
+                  "filter": {
+                    "term": {
+                      "event.outcome": "failure"
+                    }
+                  },
+                  "aggs": {
+                    "count": {
+                      "value_count": {
+                        "field": "span.id"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "format": {
+        "property": "aggregations.by_edge.buckets"
+      },
+      "transform": [
+        {
+          "type": "formula",
+          "as": "edgeKey",
+          "expr": "datum.key"
+        },
+        {
+          "type": "formula",
+          "as": "spanCount",
+          "expr": "datum.doc_count"
+        },
+        {
+          "type": "formula",
+          "as": "spanErrors",
+          "expr": "datum.span_errors.count.value"
+        },
+        {
+          "type": "formula",
+          "as": "spanErrorRate",
+          "expr": "datum.doc_count > 0 ? datum.span_errors.count.value / datum.doc_count : 0"
+        }
+      ]
+    },
+    {
+      "name": "nodes-display",
+      "source": "node-defs",
+      "transform": [
+        {
+          "type": "lookup",
+          "from": "service-stats",
+          "key": "serviceId",
+          "fields": [
+            "id"
+          ],
+          "as": [
+            "stats"
+          ],
+          "default": {
+            "txnCount": 0,
+            "errorRate": 0,
+            "avgDurationMs": 0
+          }
+        },
+        {
+          "type": "formula",
+          "as": "txnCount",
+          "expr": "datum.stats ? datum.stats.txnCount : 0"
+        },
+        {
+          "type": "formula",
+          "as": "errorRate",
+          "expr": "datum.stats ? datum.stats.errorRate : 0"
+        },
+        {
+          "type": "formula",
+          "as": "avgDurationMs",
+          "expr": "datum.stats ? datum.stats.avgDurationMs : 0"
+        },
+        {
+          "type": "formula",
+          "as": "hasLiveData",
+          "expr": "datum.txnCount > 0"
+        },
+        {
+          "type": "formula",
+          "as": "nodeColor",
+          "expr": "datum.group != 'app' ? datum.baseColor : (datum.errorRate > 0.15 ? '#C0392B' : datum.errorRate > 0.05 ? '#E67E22' : datum.hasLiveData ? '#1A9850' : datum.baseColor)"
+        },
+        {
+          "type": "formula",
+          "as": "nodeSize",
+          "expr": "pow(nodeRadius * 2 + (datum.hasLiveData ? clamp(datum.txnCount / 20, 0, 16) : 0), 2)"
+        },
+        {
+          "type": "formula",
+          "as": "highlighted",
+          "expr": "selectedNode != null && datum.id == selectedNode"
+        },
+        {
+          "type": "formula",
+          "as": "opacity",
+          "expr": "selectedNode == null ? 1 : (datum.id == selectedNode ? 1 : 0.25)"
+        },
+        {
+          "type": "formula",
+          "as": "tooltip",
+          "expr": "datum.hasLiveData ? (datum.id + ' | txn: ' + datum.txnCount + ' | errors: ' + format(datum.errorRate, '.0%') + ' | avg: ' + format(datum.avgDurationMs, '.0f') + 'ms') : datum.id"
+        }
+      ]
+    },
+    {
+      "name": "edges-with-coords",
+      "source": "edge-defs",
+      "transform": [
+        {
+          "type": "lookup",
+          "from": "node-defs",
+          "key": "id",
+          "fields": [
+            "source"
+          ],
+          "as": [
+            "src_node"
+          ]
+        },
+        {
+          "type": "lookup",
+          "from": "node-defs",
+          "key": "id",
+          "fields": [
+            "target"
+          ],
+          "as": [
+            "tgt_node"
+          ]
+        },
+        {
+          "type": "lookup",
+          "from": "span-stats",
+          "key": "edgeKey",
+          "fields": [
+            "edgeKey"
+          ],
+          "as": [
+            "edgeStats"
+          ],
+          "default": {
+            "spanCount": 0,
+            "spanErrorRate": 0
+          }
+        },
+        {
+          "type": "formula",
+          "as": "x1",
+          "expr": "datum.src_node.x"
+        },
+        {
+          "type": "formula",
+          "as": "y1",
+          "expr": "datum.src_node.y"
+        },
+        {
+          "type": "formula",
+          "as": "x2",
+          "expr": "datum.tgt_node.x"
+        },
+        {
+          "type": "formula",
+          "as": "y2",
+          "expr": "datum.tgt_node.y"
+        },
+        {
+          "type": "formula",
+          "as": "mx",
+          "expr": "(datum.x1 + datum.x2) / 2"
+        },
+        {
+          "type": "formula",
+          "as": "my",
+          "expr": "(datum.y1 + datum.y2) / 2"
+        },
+        {
+          "type": "formula",
+          "as": "spanCount",
+          "expr": "datum.edgeStats ? datum.edgeStats.spanCount : 0"
+        },
+        {
+          "type": "formula",
+          "as": "spanErrorRate",
+          "expr": "datum.edgeStats ? datum.edgeStats.spanErrorRate : 0"
+        },
+        {
+          "type": "formula",
+          "as": "edgeWidth",
+          "expr": "datum.spanCount > 0 ? clamp(1.5 + datum.spanCount / 40, 1.5, 8) : 1.5"
+        },
+        {
+          "type": "formula",
+          "as": "edgeColor",
+          "expr": "datum.spanErrorRate > 0.15 ? '#C0392B' : datum.spanErrorRate > 0.05 ? '#E67E22' : datum.spanCount > 0 ? '#1A9850' : '#c8d4e3'"
+        },
+        {
+          "type": "formula",
+          "as": "highlighted",
+          "expr": "selectedNode != null && (datum.source == selectedNode || datum.target == selectedNode)"
+        }
+      ]
+    }
+  ],
+  "scales": [
+    {
+      "name": "errorColor",
+      "type": "linear",
+      "domain": [
+        0,
+        0.05,
+        0.15,
+        1
+      ],
+      "range": [
+        "#1A9850",
+        "#E67E22",
+        "#C0392B",
+        "#8B0000"
+      ]
+    }
+  ],
+  "marks": [
+    {
+      "name": "title-text",
+      "type": "text",
+      "encode": {
+        "enter": {
+          "x": {
+            "value": 460
+          },
+          "y": {
+            "value": 18
+          },
+          "align": {
+            "value": "center"
+          },
+          "baseline": {
+            "value": "middle"
+          },
+          "text": {
+            "value": "LendPath \u2014 Service Network Topology"
+          },
+          "font": {
+            "value": "Arial, sans-serif"
+          },
+          "fontSize": {
+            "value": 15
+          },
+          "fontWeight": {
+            "value": "bold"
+          },
+          "fill": {
+            "value": "#1a2332"
+          }
+        }
+      }
+    },
+    {
+      "name": "edges",
+      "type": "rule",
+      "from": {
+        "data": "edges-with-coords"
+      },
+      "encode": {
+        "update": {
+          "x": {
+            "field": "x1"
+          },
+          "y": {
+            "field": "y1"
+          },
+          "x2": {
+            "field": "x2"
+          },
+          "y2": {
+            "field": "y2"
+          },
+          "stroke": [
+            {
+              "test": "datum.highlighted",
+              "field": "edgeColor"
+            },
+            {
+              "test": "selectedNode == null",
+              "field": "edgeColor"
+            },
+            {
+              "value": "#e0e0e0"
+            }
+          ],
+          "strokeWidth": [
+            {
+              "test": "datum.highlighted || selectedNode == null",
+              "field": "edgeWidth"
+            },
+            {
+              "value": 1
+            }
+          ],
+          "strokeOpacity": [
+            {
+              "test": "selectedNode == null",
+              "value": 0.7
+            },
+            {
+              "test": "datum.highlighted",
+              "value": 1
+            },
+            {
+              "value": 0.1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "arrowheads",
+      "type": "symbol",
+      "from": {
+        "data": "edges-with-coords"
+      },
+      "encode": {
+        "update": {
+          "x": {
+            "field": "x2"
+          },
+          "y": {
+            "field": "y2"
+          },
+          "shape": {
+            "value": "triangle"
+          },
+          "angle": {
+            "signal": "atan2(datum.y2 - datum.y1, datum.x2 - datum.x1) * 180 / PI + 90"
+          },
+          "size": {
+            "value": 80
+          },
+          "fill": [
+            {
+              "test": "datum.highlighted || selectedNode == null",
+              "field": "edgeColor"
+            },
+            {
+              "value": "#e0e0e0"
+            }
+          ],
+          "fillOpacity": [
+            {
+              "test": "selectedNode == null",
+              "value": 0.7
+            },
+            {
+              "test": "datum.highlighted",
+              "value": 1
+            },
+            {
+              "value": 0.1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "edge-span-count",
+      "type": "text",
+      "from": {
+        "data": "edges-with-coords"
+      },
+      "encode": {
+        "update": {
+          "x": {
+            "field": "mx"
+          },
+          "y": {
+            "field": "my"
+          },
+          "text": {
+            "signal": "datum.spanCount > 0 ? format(datum.spanCount, ',') : ''"
+          },
+          "align": {
+            "value": "center"
+          },
+          "baseline": {
+            "value": "middle"
+          },
+          "font": {
+            "value": "Arial, sans-serif"
+          },
+          "fontSize": {
+            "value": 8
+          },
+          "fontWeight": {
+            "value": "bold"
+          },
+          "fill": {
+            "field": "edgeColor"
+          },
+          "fillOpacity": [
+            {
+              "test": "selectedNode == null",
+              "value": 0.85
+            },
+            {
+              "test": "datum.highlighted",
+              "value": 1
+            },
+            {
+              "value": 0
+            }
+          ],
+          "dx": {
+            "value": 7
+          }
+        }
+      }
+    },
+    {
+      "name": "node-shadow",
+      "type": "symbol",
+      "from": {
+        "data": "nodes-display"
+      },
+      "encode": {
+        "update": {
+          "x": {
+            "field": "x"
+          },
+          "y": {
+            "field": "y"
+          },
+          "shape": {
+            "value": "circle"
+          },
+          "size": {
+            "signal": "pow(nodeRadius * 2 + 8, 2)"
+          },
+          "fill": {
+            "value": "#000"
+          },
+          "fillOpacity": {
+            "value": 0.07
+          },
+          "dx": {
+            "value": 3
+          },
+          "dy": {
+            "value": 3
+          }
+        }
+      }
+    },
+    {
+      "name": "node-fill",
+      "type": "symbol",
+      "from": {
+        "data": "nodes-display"
+      },
+      "encode": {
+        "enter": {
+          "cursor": {
+            "value": "pointer"
+          }
+        },
+        "update": {
+          "x": {
+            "field": "x"
+          },
+          "y": {
+            "field": "y"
+          },
+          "shape": {
+            "value": "circle"
+          },
+          "size": {
+            "field": "nodeSize"
+          },
+          "fill": [
+            {
+              "test": "datum.highlighted",
+              "value": "#fffbe6"
+            },
+            {
+              "test": "datum.hasLiveData && datum.group == 'app'",
+              "field": "nodeColor"
+            },
+            {
+              "value": "#ffffff"
+            }
+          ],
+          "fillOpacity": [
+            {
+              "test": "datum.highlighted || !datum.hasLiveData",
+              "value": 1
+            },
+            {
+              "value": 0.15
+            }
+          ],
+          "stroke": {
+            "field": "nodeColor"
+          },
+          "strokeWidth": [
+            {
+              "test": "datum.highlighted",
+              "value": 3.5
+            },
+            {
+              "test": "datum.hasLiveData",
+              "value": 2.5
+            },
+            {
+              "value": 1.5
+            }
+          ],
+          "strokeOpacity": {
+            "field": "opacity"
+          },
+          "tooltip": {
+            "field": "tooltip"
+          }
+        }
+      }
+    },
+    {
+      "name": "node-dot",
+      "type": "symbol",
+      "from": {
+        "data": "nodes-display"
+      },
+      "encode": {
+        "update": {
+          "x": {
+            "field": "x"
+          },
+          "y": {
+            "signal": "datum.y - nodeRadius + 10"
+          },
+          "shape": {
+            "value": "circle"
+          },
+          "size": {
+            "value": 200
+          },
+          "fill": {
+            "field": "nodeColor"
+          },
+          "fillOpacity": {
+            "field": "opacity"
+          }
+        }
+      }
+    },
+    {
+      "name": "node-txn-count",
+      "type": "text",
+      "from": {
+        "data": "nodes-display"
+      },
+      "encode": {
+        "update": {
+          "x": {
+            "field": "x"
+          },
+          "y": {
+            "field": "y"
+          },
+          "text": {
+            "signal": "datum.hasLiveData ? format(datum.txnCount, ',') : '\u2014'"
+          },
+          "align": {
+            "value": "center"
+          },
+          "baseline": {
+            "value": "middle"
+          },
+          "font": {
+            "value": "Arial, sans-serif"
+          },
+          "fontSize": {
+            "value": 11
+          },
+          "fontWeight": {
+            "value": "bold"
+          },
+          "fill": [
+            {
+              "test": "datum.hasLiveData && datum.group == 'app'",
+              "value": "#ffffff"
+            },
+            {
+              "value": "#888888"
+            }
+          ],
+          "fillOpacity": {
+            "field": "opacity"
+          }
+        }
+      }
+    },
+    {
+      "name": "node-error-ring",
+      "type": "arc",
+      "from": {
+        "data": "nodes-display"
+      },
+      "encode": {
+        "update": {
+          "x": {
+            "field": "x"
+          },
+          "y": {
+            "field": "y"
+          },
+          "innerRadius": {
+            "signal": "nodeRadius - 4"
+          },
+          "outerRadius": {
+            "signal": "nodeRadius + 2"
+          },
+          "startAngle": {
+            "value": 0
+          },
+          "endAngle": {
+            "signal": "datum.errorRate > 0 ? datum.errorRate * 2 * PI : 0"
+          },
+          "fill": {
+            "value": "#C0392B"
+          },
+          "fillOpacity": [
+            {
+              "test": "datum.errorRate > 0",
+              "value": 0.85
+            },
+            {
+              "value": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "node-labels",
+      "type": "text",
+      "from": {
+        "data": "nodes-display"
+      },
+      "encode": {
+        "update": {
+          "x": {
+            "field": "x"
+          },
+          "y": {
+            "signal": "datum.y + nodeRadius + 14"
+          },
+          "text": {
+            "field": "label"
+          },
+          "align": {
+            "value": "center"
+          },
+          "baseline": {
+            "value": "top"
+          },
+          "font": {
+            "value": "Arial, sans-serif"
+          },
+          "fontSize": {
+            "value": 10
+          },
+          "fontWeight": [
+            {
+              "test": "datum.highlighted",
+              "value": "bold"
+            },
+            {
+              "value": "normal"
+            }
+          ],
+          "fill": {
+            "field": "nodeColor"
+          },
+          "fillOpacity": {
+            "field": "opacity"
+          },
+          "lineBreak": {
+            "value": "\n"
+          }
+        }
+      }
+    },
+    {
+      "type": "text",
+      "encode": {
+        "enter": {
+          "x": {
+            "value": 20
+          },
+          "y": {
+            "value": 55
+          },
+          "text": {
+            "value": "APPLICATION SERVICES"
+          },
+          "font": {
+            "value": "Arial, sans-serif"
+          },
+          "fontSize": {
+            "value": 9
+          },
+          "fontWeight": {
+            "value": "bold"
+          },
+          "fill": {
+            "value": "#0077CC"
+          },
+          "opacity": {
+            "value": 0.45
+          },
+          "letterSpacing": {
+            "value": 1.5
+          }
+        }
+      }
+    },
+    {
+      "type": "text",
+      "encode": {
+        "enter": {
+          "x": {
+            "value": 20
+          },
+          "y": {
+            "value": 418
+          },
+          "text": {
+            "value": "INFRASTRUCTURE"
+          },
+          "font": {
+            "value": "Arial, sans-serif"
+          },
+          "fontSize": {
+            "value": 9
+          },
+          "fontWeight": {
+            "value": "bold"
+          },
+          "fill": {
+            "value": "#666"
+          },
+          "opacity": {
+            "value": 0.45
+          },
+          "letterSpacing": {
+            "value": 1.5
+          }
+        }
+      }
+    },
+    {
+      "type": "text",
+      "encode": {
+        "enter": {
+          "x": {
+            "value": 20
+          },
+          "y": {
+            "value": 518
+          },
+          "text": {
+            "value": "EXTERNAL SERVICES"
+          },
+          "font": {
+            "value": "Arial, sans-serif"
+          },
+          "fontSize": {
+            "value": 9
+          },
+          "fontWeight": {
+            "value": "bold"
+          },
+          "fill": {
+            "value": "#27AE60"
+          },
+          "opacity": {
+            "value": 0.45
+          },
+          "letterSpacing": {
+            "value": 1.5
+          }
+        }
+      }
+    },
+    {
+      "name": "legend",
+      "type": "group",
+      "encode": {
+        "enter": {
+          "x": {
+            "value": 16
+          },
+          "y": {
+            "value": 593
+          }
+        }
+      },
+      "marks": [
+        {
+          "type": "symbol",
+          "encode": {
+            "enter": [
+              {
+                "x": {
+                  "value": 0
+                },
+                "shape": {
+                  "value": "circle"
+                },
+                "size": {
+                  "value": 100
+                },
+                "fill": {
+                  "value": "#1A9850"
+                },
+                "stroke": {
+                  "value": "#1A9850"
+                },
+                "strokeWidth": {
+                  "value": 1.5
+                }
+              },
+              {
+                "x": {
+                  "value": 90
+                },
+                "shape": {
+                  "value": "circle"
+                },
+                "size": {
+                  "value": 100
+                },
+                "fill": {
+                  "value": "#E67E22"
+                },
+                "stroke": {
+                  "value": "#E67E22"
+                },
+                "strokeWidth": {
+                  "value": 1.5
+                }
+              },
+              {
+                "x": {
+                  "value": 190
+                },
+                "shape": {
+                  "value": "circle"
+                },
+                "size": {
+                  "value": 100
+                },
+                "fill": {
+                  "value": "#C0392B"
+                },
+                "stroke": {
+                  "value": "#C0392B"
+                },
+                "strokeWidth": {
+                  "value": 1.5
+                }
+              },
+              {
+                "x": {
+                  "value": 290
+                },
+                "shape": {
+                  "value": "circle"
+                },
+                "size": {
+                  "value": 100
+                },
+                "fill": {
+                  "value": "#0077CC"
+                },
+                "stroke": {
+                  "value": "#0077CC"
+                },
+                "strokeWidth": {
+                  "value": 1.5
+                }
+              },
+              {
+                "x": {
+                  "value": 450
+                },
+                "y": {
+                  "value": 0
+                },
+                "shape": {
+                  "value": "square"
+                },
+                "size": {
+                  "value": 80
+                },
+                "fill": {
+                  "value": "#1A9850"
+                }
+              },
+              {
+                "x": {
+                  "value": 530
+                },
+                "y": {
+                  "value": 0
+                },
+                "shape": {
+                  "value": "square"
+                },
+                "size": {
+                  "value": 80
+                },
+                "fill": {
+                  "value": "#E67E22"
+                }
+              },
+              {
+                "x": {
+                  "value": 610
+                },
+                "y": {
+                  "value": 0
+                },
+                "shape": {
+                  "value": "square"
+                },
+                "size": {
+                  "value": 80
+                },
+                "fill": {
+                  "value": "#C0392B"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "encode": {
+            "enter": [
+              {
+                "x": {
+                  "value": 13
+                },
+                "y": {
+                  "value": 4
+                },
+                "text": {
+                  "value": "healthy"
+                },
+                "font": {
+                  "value": "Arial"
+                },
+                "fontSize": {
+                  "value": 9
+                },
+                "fill": {
+                  "value": "#1A9850"
+                }
+              },
+              {
+                "x": {
+                  "value": 103
+                },
+                "y": {
+                  "value": 4
+                },
+                "text": {
+                  "value": "warn >5%"
+                },
+                "font": {
+                  "value": "Arial"
+                },
+                "fontSize": {
+                  "value": 9
+                },
+                "fill": {
+                  "value": "#E67E22"
+                }
+              },
+              {
+                "x": {
+                  "value": 203
+                },
+                "y": {
+                  "value": 4
+                },
+                "text": {
+                  "value": "error >15%"
+                },
+                "font": {
+                  "value": "Arial"
+                },
+                "fontSize": {
+                  "value": 9
+                },
+                "fill": {
+                  "value": "#C0392B"
+                }
+              },
+              {
+                "x": {
+                  "value": 303
+                },
+                "y": {
+                  "value": 4
+                },
+                "text": {
+                  "value": "no data"
+                },
+                "font": {
+                  "value": "Arial"
+                },
+                "fontSize": {
+                  "value": 9
+                },
+                "fill": {
+                  "value": "#0077CC"
+                }
+              },
+              {
+                "x": {
+                  "value": 425
+                },
+                "y": {
+                  "value": 4
+                },
+                "text": {
+                  "value": "edges:"
+                },
+                "font": {
+                  "value": "Arial"
+                },
+                "fontSize": {
+                  "value": 9
+                },
+                "fill": {
+                  "value": "#888"
+                }
+              },
+              {
+                "x": {
+                  "value": 463
+                },
+                "y": {
+                  "value": 4
+                },
+                "text": {
+                  "value": "ok"
+                },
+                "font": {
+                  "value": "Arial"
+                },
+                "fontSize": {
+                  "value": 9
+                },
+                "fill": {
+                  "value": "#1A9850"
+                }
+              },
+              {
+                "x": {
+                  "value": 543
+                },
+                "y": {
+                  "value": 4
+                },
+                "text": {
+                  "value": "warn"
+                },
+                "font": {
+                  "value": "Arial"
+                },
+                "fontSize": {
+                  "value": 9
+                },
+                "fill": {
+                  "value": "#E67E22"
+                }
+              },
+              {
+                "x": {
+                  "value": 623
+                },
+                "y": {
+                  "value": 4
+                },
+                "text": {
+                  "value": "error"
+                },
+                "font": {
+                  "value": "Arial"
+                },
+                "fontSize": {
+                  "value": 9
+                },
+                "fill": {
+                  "value": "#C0392B"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
