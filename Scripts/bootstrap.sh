@@ -1,5 +1,5 @@
 pip install faker elasticsearch --break-system-packages 
-python /workspace/workshop/Machine-Learning-Workshop/bootstrap.py \
+python /workspace/workshop/Machine_Learning_Workshop/bootstrap.py \
   --host http://kubernetes-vm:30920 \
   --user sdg \
   --password changeme \
