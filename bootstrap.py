@@ -1884,6 +1884,129 @@ def create_dfa_data_views(kibana_host, auth, verify_ssl):
             print(f"      {resp}")
 
 
+def create_workshop_data_views(kibana_host, auth, verify_ssl):
+    """
+    Create Kibana data views for all workshop data streams.
+    Uses the saved_objects _find endpoint to check existence (avoids the
+    single-object GET limitation in create_dfa_data_views).
+    Wildcard patterns with no @timestamp (e.g. metrics-haproxy*) are created
+    without a timeFieldName so they don't error on missing timestamp fields.
+    """
+
+    # (name, index_pattern, has_timestamp)
+    # name    — displayed in Kibana data view list
+    # index   — the index pattern string
+    # ts      — whether to set timeFieldName = "@timestamp"
+    WORKSHOP_VIEWS = [
+        # ── Metrics ───────────────────────────────────────────────────────────
+        ("metrics-mortgage.hosts",              "metrics-mortgage.hosts-default-*",                       True),
+        ("metrics-mortgage.services",           "metrics-mortgage.services-default-*",                    True),
+        ("metrics-nginx.stubstatus",            "metrics-nginx.stubstatus-mortgage-*",                    True),
+        ("metrics-haproxy.stat",                "metrics-haproxy.stat-mortgage-*",                        True),
+        ("metrics-haproxy.info",                "metrics-haproxy.info-mortgage-*",                        True),
+        ("metrics-haproxy.*",                   "metrics-haproxy*",                                       True),
+        ("metrics-kafka.broker",                "metrics-kafka.broker-mortgage-*",                        True),
+        ("metrics-kafka.partition",             "metrics-kafka.partition-mortgage-*",                     True),
+        ("metrics-oracle.sysmetric",            "metrics-oracle.sysmetric-mortgage-*",                    True),
+        ("metrics-oracle.tablespace",           "metrics-oracle.tablespace-mortgage-*",                   True),
+        ("metrics-apm.app.lendpath-appraisal",  "metrics-apm.app.lendpath-appraisal-service-default-*",  True),
+        ("metrics-apm.app.lendpath-credit",     "metrics-apm.app.lendpath-credit-service-default-*",     True),
+        ("metrics-apm.app.lendpath-document",   "metrics-apm.app.lendpath-document-service-default-*",   True),
+        ("metrics-apm.app.lendpath-los",        "metrics-apm.app.lendpath-los-default-*",                True),
+        ("metrics-apm.app.lendpath-underwriting","metrics-apm.app.lendpath-underwriting-default-*",      True),
+        ("metrics-apm.app.lendpath-*",          "metrics-apm.app.lendpath-*",                            True),
+        ("metrics-system.diskio",               "metrics-system.diskio-default-*",                       True),
+        ("metrics-system.process",              "metrics-system.process-default-*",                      True),
+        ("metrics-system.cpu",                  "metrics-system.cpu-default-*",                          True),
+        ("metrics-system.network",              "metrics-system.network-default-*",                      True),
+        ("metrics-system.fsstat",               "metrics-system.fsstat-default-*",                       True),
+        ("metrics-system.load",                 "metrics-system.load-default-*",                         True),
+        ("metrics-system.memory",               "metrics-system.memory-default-*",                       True),
+        ("metrics-system.process.summary",      "metrics-system.process.summary-*",                      True),
+        ("metrics-system.socket_summary",       "metrics-system.socket_summary-default-*",               True),
+        ("metrics-system.update",               "metrics-system.update-default-*",                       True),
+        ("metrics-system.*",                    "metrics-system.*",                                       True),
+        # ── Logs ──────────────────────────────────────────────────────────────
+        ("logs-aws.vpcflow",                    "logs-aws.vpcflow-mortgage-*",                            True),
+        ("logs-aws.waf",                        "logs-aws.waf-mortgage-*",                                True),
+        ("logs-aws.*",                          "logs-aws.*",                                             True),
+        ("logs-nginx.access",                   "logs-nginx.access-mortgage-*",                          True),
+        ("logs-nginx.error",                    "logs-nginx.error-mortgage-*",                            True),
+        ("logs-nginx.*",                        "logs-nginx.*",                                           True),
+        ("logs-haproxy.log",                    "logs-haproxy.log-mortgage-*",                            True),
+        ("logs-mortgage.applications",          "logs-mortgage.applications-default-*",                  True),
+        ("logs-mortgage.audit",                 "logs-mortgage.audit-default-*",                         True),
+        ("logs-mortgage.*",                     "logs-mortgage.*",                                        True),
+        ("logs-coredns.log",                    "logs-coredns.log-mortgage-*",                            True),
+        ("logs-akamai.siem",                    "logs-akamai.siem-mortgage-*",                            True),
+        ("logs-ping_one.audit",                 "logs-ping_one.audit-mortgage-*",                        True),
+        ("logs-apm.error",                      "logs-apm.error-default-*",                              True),
+        ("logs-oracle.database_audit",          "logs-oracle.database_audit-mortgage-*",                 True),
+    ]
+
+    print("\n▸ Creating workshop data views…")
+    reachable, info = _kibana_is_reachable(kibana_host, auth, verify_ssl)
+    if not reachable:
+        print(f"  ⚠ Cannot reach Kibana: {info}")
+        return
+
+    # Fetch all existing data view titles in one call using _find
+    existing_titles = set()
+    offset = 0
+    while True:
+        fs, fr = make_kibana_request(
+            f"{kibana_host}/api/saved_objects/_find"
+            f"?type=index-pattern&per_page=100&page={offset // 100 + 1}",
+            "GET", None, auth, verify_ssl
+        )
+        if fs != 200:
+            break
+        saved = fr.get("saved_objects", [])
+        for obj in saved:
+            t = obj.get("attributes", {}).get("title", "")
+            if t:
+                existing_titles.add(t)
+        total = fr.get("total", 0)
+        offset += len(saved)
+        if offset >= total or not saved:
+            break
+
+    created = skipped = failed = 0
+
+    for name, index_pattern, has_ts in WORKSHOP_VIEWS:
+        if index_pattern in existing_titles:
+            print(f"  ~ [exists] {name}  ({index_pattern})")
+            skipped += 1
+            continue
+
+        dv_body = {
+            "title":  index_pattern,
+            "name":   name,
+        }
+        if has_ts:
+            dv_body["timeFieldName"] = "@timestamp"
+
+        status, resp = make_kibana_request(
+            f"{kibana_host}/api/data_views/data_view",
+            "POST",
+            {"data_view": dv_body},
+            auth, verify_ssl
+        )
+        if status in (200, 201):
+            print(f"  ✓ [{status}] {name}  ({index_pattern})")
+            created += 1
+        elif status == 400 and "already exists" in str(resp).lower():
+            print(f"  ~ [exists] {name}  ({index_pattern})")
+            skipped += 1
+        else:
+            print(f"  ✗ [{status}] {name}  ({index_pattern})")
+            print(f"      {resp}")
+            failed += 1
+
+    print(f"\n  Data views: {created} created, {skipped} already existed"
+          + (f", {failed} failed" if failed else ""))
+
+
 def load_graph_workspace(kibana_host, auth, verify_ssl):
     ws_state_obj = {
         "indexPattern": {
@@ -2069,6 +2192,7 @@ def load_kibana_assets(kibana_host, auth, verify_ssl, vega_files):
 
     load_graph_workspace(kibana_host, auth, verify_ssl)
     create_dfa_data_views(kibana_host, auth, verify_ssl)
+    create_workshop_data_views(kibana_host, auth, verify_ssl)
 
 
 # =============================================================================
@@ -2495,6 +2619,7 @@ Examples:
         if not args.skip_kibana and args.kibana_host:
             kibana_auth = f"Basic {base64.b64encode(f'{args.user}:{args.password}'.encode()).decode()}"
             create_dfa_data_views(args.kibana_host, kibana_auth, verify_ssl)
+            create_workshop_data_views(args.kibana_host, kibana_auth, verify_ssl)
 
     else:
         load_anomaly_jobs(args.host, auth, verify_ssl, args.job_files,
