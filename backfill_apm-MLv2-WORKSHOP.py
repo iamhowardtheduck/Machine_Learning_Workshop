@@ -6,8 +6,9 @@ backfill_apm-MLv2-WORKSHOP.py — 7-day APM trace backfill with:
   • 7-day default window
   • Anomaly spike injection via --spike-manifest:
       volume     → multiplies trace count per spike hour
-      error_rate → sets fraction of traces that become errors during spike
-      latency    → multiplies transaction duration during spike
+      error_rate → passed as spike_error_rate into generate_trace()
+      latency    → passed as spike_latency_mult into generate_trace()
+  • Error docs routed to logs-apm.error-default (data_stream.type = "logs")
 """
 
 import argparse
@@ -66,17 +67,14 @@ try:
 except ImportError:
     print("ERROR: business_calendar.py not found."); sys.exit(1)
 
-INDEX = "traces-apm-default"
+TRACE_INDEX = "traces-apm-default"
+ERROR_INDEX = "logs-apm.error-default"
 
 
 # ---------------------------------------------------------------------------
 # Spike manifest loader
 # ---------------------------------------------------------------------------
 def load_spike_manifest(path):
-    """
-    Load anomaly_spikes.json written by backfill_all-MLv2-WORKSHOP.py.
-    Returns the full spike list, or [] if path is None / unreadable.
-    """
     if not path:
         return []
     try:
@@ -98,7 +96,6 @@ def load_spike_manifest(path):
 
 
 def spike_at_hour(spikes, hour_offset):
-    """Return the active spike dict for a given absolute hour offset, or None."""
     for s in spikes:
         if s["start_hour"] <= hour_offset < s["end_hour"]:
             return s
@@ -143,20 +140,23 @@ def tz_name_str(tz):
 
 
 # ---------------------------------------------------------------------------
-# Trace action generator — spike-aware
+# Trace action generator — spike-aware, correct index routing
 # ---------------------------------------------------------------------------
 def trace_action_gen(day_dt, traces_per_day, tz, max_hourly,
-                     spikes=None, day_offset=0):
+                     spikes=None, day_offset=0, base_error_rate=0.05):
     """
     Yield bulk action dicts for all traces in one day.
 
-    Spike behaviour per type:
+    Spike behaviour:
       volume     → hour trace count × spike.volume_mult (cap bypassed)
-      error_rate → each trace outcome overridden to 'failure' with probability
-                   spike.error_rate; transaction.result set to 'HTTP 5xx'
-      latency    → transaction.duration.us multiplied by spike.latency_mult
+      error_rate → passed as spike_error_rate to generate_trace()
+      latency    → passed as spike_latency_mult to generate_trace()
+
+    Index routing (per doc):
+      data_stream.type == "logs"  → logs-apm.error-default
+      everything else             → traces-apm-default
     """
-    spikes       = spikes or []
+    spikes          = spikes or []
     service_names   = list(SERVICES.keys())
     service_weights = [40, 20, 15, 15, 10]
 
@@ -165,7 +165,7 @@ def trace_action_gen(day_dt, traces_per_day, tz, max_hourly,
     weights  = hour_weights_for_day(day_dt)
     total_w  = sum(weights)
 
-    # Build per-hour trace counts with spike volume multiplier
+    # Per-hour trace counts with volume spike multiplier
     hour_counts = []
     allocated   = 0
     for hour, w in enumerate(weights):
@@ -198,54 +198,47 @@ def trace_action_gen(day_dt, traces_per_day, tz, max_hourly,
         h_start_local = day_start_local + timedelta(hours=hour)
         h_start_utc   = h_start_local.astimezone(timezone.utc)
 
+        # Spike params passed directly into generate_trace
+        spike_error_rate   = active_spike.get("error_rate") \
+                             if active_spike and "error_rate" in spike_types else None
+        spike_latency_mult = active_spike.get("latency_mult") \
+                             if active_spike and "latency" in spike_types else None
+
         for _ in range(n):
-            ts_utc  = h_start_utc + timedelta(seconds=random.uniform(0, 3599))
-            ts_iso  = ts_utc.strftime("%Y-%m-%dT%H:%M:%S.") + \
-                      f"{ts_utc.microsecond // 1000:03d}Z"
+            ts_utc = h_start_utc + timedelta(seconds=random.uniform(0, 3599))
+            ts_iso = ts_utc.strftime("%Y-%m-%dT%H:%M:%S.") + \
+                     f"{ts_utc.microsecond // 1000:03d}Z"
+            ts_us  = int(ts_utc.timestamp() * 1_000_000)
+
             svc_name = random.choices(service_names, weights=service_weights, k=1)[0]
 
-            actions = generate_trace(svc_name)
+            actions = generate_trace(
+                svc_name,
+                error_rate=base_error_rate,
+                spike_error_rate=spike_error_rate,
+                spike_latency_mult=spike_latency_mult,
+            )
+
+            # Stamp every doc with the backfill timestamp — generate_trace
+            # uses datetime.now() internally so we correct it here.
             for action in actions:
                 doc = action["_source"]
                 doc["@timestamp"] = ts_iso
-
-                # ── error_rate spike ──────────────────────────────────────
-                if active_spike and "error_rate" in spike_types:
-                    err_rate = active_spike.get("error_rate", 0.0)
-                    if random.random() < err_rate:
-                        # Mark transaction as failed
-                        if doc.get("processor", {}).get("event") == "transaction" \
-                                or doc.get("transaction"):
-                            if "transaction" not in doc:
-                                doc["transaction"] = {}
-                            doc["transaction"]["result"] = "HTTP 5xx"
-                            if "outcome" in doc:
-                                doc["outcome"] = "failure"
-                            # Also set a top-level error flag APM consumers expect
-                            doc["event"] = doc.get("event", {})
-                            if isinstance(doc["event"], dict):
-                                doc["event"]["outcome"] = "failure"
-
-                # ── latency spike ─────────────────────────────────────────
-                if active_spike and "latency" in spike_types:
-                    lat_mult = active_spike.get("latency_mult", 1.0)
-                    # transaction.duration.us
-                    txn = doc.get("transaction", {})
-                    dur = txn.get("duration", {})
-                    if isinstance(dur, dict) and "us" in dur:
-                        dur["us"] = int(dur["us"] * lat_mult)
-                    # span.duration.us (for span docs)
-                    span = doc.get("span", {})
-                    span_dur = span.get("duration", {})
-                    if isinstance(span_dur, dict) and "us" in span_dur:
-                        span_dur["us"] = int(span_dur["us"] * lat_mult)
-
-                yield {"_op_type": "create", "_index": INDEX, "_source": doc}
+                if "timestamp" in doc:
+                    doc["timestamp"]["us"] = ts_us
+                # Route to correct index
+                ds_type = doc.get("data_stream", {}).get("type", "traces")
+                action["_index"] = ERROR_INDEX if ds_type == "logs" else TRACE_INDEX
+                yield action
 
             # Metrics ~2% of the time
             if random.random() < 0.02:
                 for msvc in service_names:
                     for action in generate_metrics(msvc, ts_iso=ts_iso):
+                        doc = action["_source"]
+                        doc["@timestamp"] = ts_iso
+                        if "timestamp" in doc:
+                            doc["timestamp"]["us"] = ts_us
                         yield action
 
 
@@ -253,12 +246,14 @@ def trace_action_gen(day_dt, traces_per_day, tz, max_hourly,
 # Worker
 # ---------------------------------------------------------------------------
 def day_worker(es, day_dt, traces_per_day, bulk_size, pb_threads, pb_queue,
-               progress_q, tz, max_hourly, spikes=None, day_offset=0):
+               progress_q, tz, max_hourly, spikes=None, day_offset=0,
+               base_error_rate=0.05):
     try:
         for ok, info in parallel_bulk(
             es,
             trace_action_gen(day_dt, traces_per_day, tz, max_hourly,
-                             spikes=spikes, day_offset=day_offset),
+                             spikes=spikes, day_offset=day_offset,
+                             base_error_rate=base_error_rate),
             thread_count=pb_threads, chunk_size=bulk_size,
             queue_size=pb_queue, raise_on_error=False,
             raise_on_exception=False, request_timeout=120,
@@ -273,7 +268,7 @@ def day_worker(es, day_dt, traces_per_day, bulk_size, pb_threads, pb_queue,
 # ---------------------------------------------------------------------------
 def backfill(host, user, password, verify_ssl, days, traces_per_day,
              workers, bulk_size, pb_threads, pb_queue, tz, max_hourly,
-             spikes=None):
+             spikes=None, base_error_rate=0.05):
 
     spikes = spikes or []
     ssl_opts = {"verify_certs": verify_ssl, "ssl_show_warn": False}
@@ -301,6 +296,7 @@ def backfill(host, user, password, verify_ssl, days, traces_per_day,
           + (" (bypassed during volume spikes)" if any("volume" in s.get("types",[]) for s in spikes) else ""))
     print(f"  ~Total traces:     {total_traces:>12,}")
     print(f"  ~Total docs:       {total_docs:>12,}")
+    print(f"  Base error rate:   {base_error_rate*100:.1f}%")
     print(f"  Spike windows:     {len(spikes)}"
           + (f"  [{', '.join(all_spike_types)}]" if all_spike_types else ""))
     print(f"  Timezone:          {tz_name_str(tz)}")
@@ -347,7 +343,7 @@ def backfill(host, user, password, verify_ssl, days, traces_per_day,
     for d in range(days):
         day     = start_day + timedelta(days=d)
         day_vol = min(round(traces_per_day * day_volume_factor(day)), max_hourly * 24)
-        work_q.put((day, day_vol, d))   # include day_offset
+        work_q.put((day, day_vol, d))
 
     def worker():
         while True:
@@ -358,7 +354,8 @@ def backfill(host, user, password, verify_ssl, days, traces_per_day,
             try:
                 day_worker(es, day_dt, vol, bulk_size, pb_threads, pb_queue,
                            progress_q, tz, max_hourly,
-                           spikes=spikes, day_offset=d_offset)
+                           spikes=spikes, day_offset=d_offset,
+                           base_error_rate=base_error_rate)
             except KeyboardInterrupt:
                 return
             except Exception as e:
@@ -405,6 +402,8 @@ def main():
     p.add_argument("--parallel-bulk-queue",   "--pb-queue",   type=int, default=4)
     p.add_argument("--timezone",           default=None, metavar="TZ")
     p.add_argument("--max-hourly",         type=int, default=10_000)
+    p.add_argument("--base-error-rate",    type=float, default=0.05, metavar="RATE",
+                   help="Baseline fraction of traces that emit error docs (default: 0.05)")
     p.add_argument("--spike-manifest",     default=None, metavar="PATH",
                    help="Path to anomaly_spikes.json written by the orchestrator")
     args = p.parse_args()
@@ -415,7 +414,9 @@ def main():
         args.days, args.traces_per_day,
         args.workers, args.bulk_size,
         args.parallel_bulk_threads, args.parallel_bulk_queue,
-        tz, args.max_hourly, spikes=spikes,
+        tz, args.max_hourly,
+        spikes=spikes,
+        base_error_rate=args.base_error_rate,
     )
 
 if __name__ == "__main__":
