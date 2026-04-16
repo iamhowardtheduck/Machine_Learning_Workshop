@@ -4,9 +4,14 @@ backfill_apm-MLv2-WORKSHOP.py — 7-day APM trace backfill with:
   • 10,000 events/hour hard cap at peak
   • Timestamps in user's local timezone (auto-detected or --timezone)
   • 7-day default window
+  • Anomaly spike injection via --spike-manifest:
+      volume     → multiplies trace count per spike hour
+      error_rate → sets fraction of traces that become errors during spike
+      latency    → multiplies transaction duration during spike
 """
 
 import argparse
+import json
 import os
 import random
 import sys
@@ -21,21 +26,14 @@ try:
 except ImportError:
     print("ERROR: elasticsearch-py not installed."); sys.exit(1)
 
-# Resolve the directory this script physically lives in — works even when
-# launched as a subprocess with a relative __file__ path.
 _HERE = os.path.dirname(os.path.realpath(os.path.abspath(__file__)))
 
-# Insert the script's own directory first — this is where apm_trace_generator.py
-# must live alongside this script.
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
-
-# Also try cwd and parent of cwd as fallbacks
 for _search in (os.getcwd(), os.path.dirname(os.getcwd())):
     if _search not in sys.path:
         sys.path.append(_search)
 
-# Attempt direct file-based import as final fallback regardless of sys.path
 def _import_apm_trace_generator():
     import importlib.util
     candidate = os.path.join(_HERE, "apm_trace_generator.py")
@@ -45,7 +43,6 @@ def _import_apm_trace_generator():
         sys.modules["apm_trace_generator"] = mod
         spec.loader.exec_module(mod)
         return mod
-    # Search all sys.path entries
     for _p in sys.path:
         candidate = os.path.join(_p, "apm_trace_generator.py")
         if os.path.exists(candidate):
@@ -60,10 +57,6 @@ _apm_mod = _import_apm_trace_generator()
 if _apm_mod is None:
     print(f"ERROR: apm_trace_generator.py not found.")
     print(f"  Script directory: {_HERE}")
-    print(f"  Searched sys.path:")
-    for _p in sys.path:
-        print(f"    {'✓' if os.path.exists(os.path.join(_p, 'apm_trace_generator.py')) else '✗'} {_p}")
-    print(f"  Ensure apm_trace_generator.py is in the same directory as this script.")
     sys.exit(1)
 
 from apm_trace_generator import SERVICES, generate_trace, generate_metrics
@@ -77,20 +70,50 @@ INDEX = "traces-apm-default"
 
 
 # ---------------------------------------------------------------------------
+# Spike manifest loader
+# ---------------------------------------------------------------------------
+def load_spike_manifest(path):
+    """
+    Load anomaly_spikes.json written by backfill_all-MLv2-WORKSHOP.py.
+    Returns the full spike list, or [] if path is None / unreadable.
+    """
+    if not path:
+        return []
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+        spikes = data.get("spikes", [])
+        if spikes:
+            print(f"  ✓ Spike manifest loaded: {len(spikes)} spike window(s)")
+            for s in spikes:
+                active = ", ".join(s.get("types", []))
+                print(f"    hours {s['start_hour']:>4}–{s['end_hour']:<4}  [{active}]  "
+                      f"vol ×{s.get('volume_mult',1):.1f}  "
+                      f"err {s.get('error_rate',0)*100:.0f}%  "
+                      f"lat ×{s.get('latency_mult',1):.1f}")
+        return spikes
+    except Exception as e:
+        print(f"  ⚠ Could not load spike manifest {path!r}: {e}")
+        return []
+
+
+def spike_at_hour(spikes, hour_offset):
+    """Return the active spike dict for a given absolute hour offset, or None."""
+    for s in spikes:
+        if s["start_hour"] <= hour_offset < s["end_hour"]:
+            return s
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Timezone helpers
 # ---------------------------------------------------------------------------
 def resolve_tz(tz_name):
     if not tz_name:
         tz = _local_tz()
         tz_str = getattr(tz, 'key', getattr(tz, 'zone', str(tz)))
-        # Warn if the resolved timezone is UTC — on most Linux servers the
-        # system timezone is UTC, which means the diurnal peak (1 PM) will be
-        # stored as 13:00 UTC and appear shifted in Kibana if the user's
-        # browser is in a different timezone.
         if "utc" in tz_str.lower() or tz_str in ("UTC", "Etc/UTC", "GMT"):
             print(f"  ⚠  Timezone is UTC (system default).")
-            print(f"     If your Kibana/browser is in a different timezone, the")
-            print(f"     diurnal peak will appear shifted in dashboards.")
             print(f"     Re-run with --timezone 'America/New_York' (or your tz)")
             print(f"     to align the peak with your local business hours.")
             print()
@@ -120,37 +143,58 @@ def tz_name_str(tz):
 
 
 # ---------------------------------------------------------------------------
-# Trace action generator with timezone + hourly cap
+# Trace action generator — spike-aware
 # ---------------------------------------------------------------------------
-def trace_action_gen(day_dt, traces_per_day, tz, max_hourly):
+def trace_action_gen(day_dt, traces_per_day, tz, max_hourly,
+                     spikes=None, day_offset=0):
     """
     Yield bulk action dicts for all traces in one day.
-    Timestamps are generated in `tz` and stored as UTC ISO strings.
-    Volume is capped at max_hourly per hour.
+
+    Spike behaviour per type:
+      volume     → hour trace count × spike.volume_mult (cap bypassed)
+      error_rate → each trace outcome overridden to 'failure' with probability
+                   spike.error_rate; transaction.result set to 'HTTP 5xx'
+      latency    → transaction.duration.us multiplied by spike.latency_mult
     """
+    spikes       = spikes or []
     service_names   = list(SERVICES.keys())
     service_weights = [40, 20, 15, 15, 10]
 
     day_start_local = datetime(day_dt.year, day_dt.month, day_dt.day, tzinfo=tz)
-    day_start_utc   = day_start_local.astimezone(timezone.utc)
 
     weights  = hour_weights_for_day(day_dt)
     total_w  = sum(weights)
 
+    # Build per-hour trace counts with spike volume multiplier
     hour_counts = []
     allocated   = 0
-    for w in weights:
-        n = round(traces_per_day * w / total_w) if total_w > 0 else 0
-        n = min(n, max_hourly)
+    for hour, w in enumerate(weights):
+        abs_hour = day_offset * 24 + hour
+        spike    = spike_at_hour(spikes, abs_hour)
+        base_n   = round(traces_per_day * w / total_w) if total_w > 0 else 0
+        if spike and "volume" in spike.get("types", []):
+            n = round(base_n * spike["volume_mult"])
+        else:
+            n = min(base_n, max_hourly)
         hour_counts.append(n)
         allocated += n
-    hour_counts[13] = min(hour_counts[13] + (traces_per_day - allocated), max_hourly)
+
+    # Remainder into peak hour 13
+    remainder  = traces_per_day - allocated
+    abs_peak   = day_offset * 24 + 13
+    peak_spike = spike_at_hour(spikes, abs_peak)
+    if peak_spike and "volume" in peak_spike.get("types", []):
+        hour_counts[13] = hour_counts[13] + remainder
+    else:
+        hour_counts[13] = min(hour_counts[13] + remainder, max_hourly)
 
     for hour, n in enumerate(hour_counts):
         if n <= 0:
             continue
-        # Add hours in LOCAL time then convert to UTC so that hour 13
-        # means 1 PM local, not 1 PM UTC.
+        abs_hour     = day_offset * 24 + hour
+        active_spike = spike_at_hour(spikes, abs_hour)
+        spike_types  = active_spike.get("types", []) if active_spike else []
+
         h_start_local = day_start_local + timedelta(hours=hour)
         h_start_utc   = h_start_local.astimezone(timezone.utc)
 
@@ -164,9 +208,41 @@ def trace_action_gen(day_dt, traces_per_day, tz, max_hourly):
             for action in actions:
                 doc = action["_source"]
                 doc["@timestamp"] = ts_iso
+
+                # ── error_rate spike ──────────────────────────────────────
+                if active_spike and "error_rate" in spike_types:
+                    err_rate = active_spike.get("error_rate", 0.0)
+                    if random.random() < err_rate:
+                        # Mark transaction as failed
+                        if doc.get("processor", {}).get("event") == "transaction" \
+                                or doc.get("transaction"):
+                            if "transaction" not in doc:
+                                doc["transaction"] = {}
+                            doc["transaction"]["result"] = "HTTP 5xx"
+                            if "outcome" in doc:
+                                doc["outcome"] = "failure"
+                            # Also set a top-level error flag APM consumers expect
+                            doc["event"] = doc.get("event", {})
+                            if isinstance(doc["event"], dict):
+                                doc["event"]["outcome"] = "failure"
+
+                # ── latency spike ─────────────────────────────────────────
+                if active_spike and "latency" in spike_types:
+                    lat_mult = active_spike.get("latency_mult", 1.0)
+                    # transaction.duration.us
+                    txn = doc.get("transaction", {})
+                    dur = txn.get("duration", {})
+                    if isinstance(dur, dict) and "us" in dur:
+                        dur["us"] = int(dur["us"] * lat_mult)
+                    # span.duration.us (for span docs)
+                    span = doc.get("span", {})
+                    span_dur = span.get("duration", {})
+                    if isinstance(span_dur, dict) and "us" in span_dur:
+                        span_dur["us"] = int(span_dur["us"] * lat_mult)
+
                 yield {"_op_type": "create", "_index": INDEX, "_source": doc}
 
-            # Emit metrics ~2% of the time
+            # Metrics ~2% of the time
             if random.random() < 0.02:
                 for msvc in service_names:
                     for action in generate_metrics(msvc, ts_iso=ts_iso):
@@ -177,11 +253,12 @@ def trace_action_gen(day_dt, traces_per_day, tz, max_hourly):
 # Worker
 # ---------------------------------------------------------------------------
 def day_worker(es, day_dt, traces_per_day, bulk_size, pb_threads, pb_queue,
-               progress_q, tz, max_hourly):
+               progress_q, tz, max_hourly, spikes=None, day_offset=0):
     try:
         for ok, info in parallel_bulk(
             es,
-            trace_action_gen(day_dt, traces_per_day, tz, max_hourly),
+            trace_action_gen(day_dt, traces_per_day, tz, max_hourly,
+                             spikes=spikes, day_offset=day_offset),
             thread_count=pb_threads, chunk_size=bulk_size,
             queue_size=pb_queue, raise_on_error=False,
             raise_on_exception=False, request_timeout=120,
@@ -195,8 +272,10 @@ def day_worker(es, day_dt, traces_per_day, bulk_size, pb_threads, pb_queue,
 # Main entry point
 # ---------------------------------------------------------------------------
 def backfill(host, user, password, verify_ssl, days, traces_per_day,
-             workers, bulk_size, pb_threads, pb_queue, tz, max_hourly):
+             workers, bulk_size, pb_threads, pb_queue, tz, max_hourly,
+             spikes=None):
 
+    spikes = spikes or []
     ssl_opts = {"verify_certs": verify_ssl, "ssl_show_warn": False}
     if not verify_ssl:
         ssl_opts["ssl_assert_fingerprint"] = None
@@ -210,16 +289,20 @@ def backfill(host, user, password, verify_ssl, days, traces_per_day,
             max_hourly * 24)
         for d in range(days)
     )
-    total_docs = total_traces * 6   # ~6 docs per trace
+    total_docs = total_traces * 6
 
+    all_spike_types = sorted({t for s in spikes for t in s.get("types", [])})
     print(f"\n{'='*64}")
     print(f"  LendPath ML Workshop v2 — APM Historical Backfill")
     print(f"{'='*64}")
     print(f"  Days:              {days}")
     print(f"  Weekday target:    {traces_per_day:>12,} traces/day  (~{traces_per_day*6:,} docs)")
-    print(f"  Peak cap:          {max_hourly:>12,} events/hour")
+    print(f"  Peak cap:          {max_hourly:>12,} events/hour"
+          + (" (bypassed during volume spikes)" if any("volume" in s.get("types",[]) for s in spikes) else ""))
     print(f"  ~Total traces:     {total_traces:>12,}")
     print(f"  ~Total docs:       {total_docs:>12,}")
+    print(f"  Spike windows:     {len(spikes)}"
+          + (f"  [{', '.join(all_spike_types)}]" if all_spike_types else ""))
     print(f"  Timezone:          {tz_name_str(tz)}")
     print(f"  Window:            {start_day}  →  {today}")
     print(f"\n  Press Ctrl+C to stop.\n")
@@ -262,19 +345,20 @@ def backfill(host, user, password, verify_ssl, days, traces_per_day,
 
     work_q = Queue()
     for d in range(days):
-        day      = start_day + timedelta(days=d)
-        day_vol  = min(round(traces_per_day * day_volume_factor(day)), max_hourly * 24)
-        work_q.put((day, day_vol))
+        day     = start_day + timedelta(days=d)
+        day_vol = min(round(traces_per_day * day_volume_factor(day)), max_hourly * 24)
+        work_q.put((day, day_vol, d))   # include day_offset
 
     def worker():
         while True:
             try:
-                day_dt, vol = work_q.get_nowait()
+                day_dt, vol, d_offset = work_q.get_nowait()
             except Empty:
                 return
             try:
                 day_worker(es, day_dt, vol, bulk_size, pb_threads, pb_queue,
-                           progress_q, tz, max_hourly)
+                           progress_q, tz, max_hourly,
+                           spikes=spikes, day_offset=d_offset)
             except KeyboardInterrupt:
                 return
             except Exception as e:
@@ -321,14 +405,17 @@ def main():
     p.add_argument("--parallel-bulk-queue",   "--pb-queue",   type=int, default=4)
     p.add_argument("--timezone",           default=None, metavar="TZ")
     p.add_argument("--max-hourly",         type=int, default=10_000)
+    p.add_argument("--spike-manifest",     default=None, metavar="PATH",
+                   help="Path to anomaly_spikes.json written by the orchestrator")
     args = p.parse_args()
-    tz = resolve_tz(args.timezone)
+    tz     = resolve_tz(args.timezone)
+    spikes = load_spike_manifest(args.spike_manifest)
     backfill(
         args.host, args.user, args.password, not args.no_verify_ssl,
         args.days, args.traces_per_day,
         args.workers, args.bulk_size,
         args.parallel_bulk_threads, args.parallel_bulk_queue,
-        tz, args.max_hourly,
+        tz, args.max_hourly, spikes=spikes,
     )
 
 if __name__ == "__main__":
