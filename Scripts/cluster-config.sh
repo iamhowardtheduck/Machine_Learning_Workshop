@@ -26,11 +26,11 @@ curl -X POST "http://localhost:30920/_security/user/sdg" -H "Content-Type: appli
 
 
 # Install LLM Connector
-bash /opt/workshops/elastic-llm.sh -m gpt-5.5 -k false -d true -n gpt5-connector -P curriculum-development
+#bash /opt/workshops/elastic-llm.sh -m gpt-5.5 -k false -d true -n gpt5-connector -P curriculum-development
 
-echo
-echo "GPT-5.2 AI Connector configured as gpt5-connector"
-echo
+#echo
+#echo "GPT-5.2 AI Connector configured as gpt5-connector"
+#echo
 
 echo
 echo "You are now ready to move onto the next set of instructions."
