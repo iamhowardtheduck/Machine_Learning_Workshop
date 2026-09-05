@@ -1,4 +1,4 @@
-python3  /workspace/workshop/Machine_Learning_Workshop/backfill_all-MLv2-WORKSHOP.py \
+python3  /home/elastic/Machine_Learning_Workshop/backfill_all-MLv2-WORKSHOP.py \
         --host https://es.elastic.lab:443 \
         --user sdg --password changeme \
         --days 30 \
