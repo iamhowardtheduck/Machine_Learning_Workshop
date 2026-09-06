@@ -1,4 +1,4 @@
-python /home/elastic/Machine_Learning_Workshop/run_workshop.py \
+python3 /home/elastic/Machine_Learning_Workshop/run_workshop.py \
   --host https://es.elastic.lab:443 \
   --user sdg --password changeme \
   --no-verify-ssl \
