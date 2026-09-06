@@ -1,16 +1,16 @@
 # Set up environment variables
-echo 'ELASTICSEARCH_USERNAME=elastic' >> /root/.env
+echo 'ELASTICSEARCH_USERNAME=elastic' >> /home/elastic/Machine_Learning_Workshop/.env
 #echo -n 'ELASTICSEARCH_PASSWORD=' >> /root/.env
-kubectl get secret elasticsearch-es-elastic-user -n default -o go-template='ELASTICSEARCH_PASSWORD={{.data.elastic | base64decode}}' >> /root/.env
+kubectl get secret elasticsearch-es-elastic-user -n default -o go-template='ELASTICSEARCH_PASSWORD={{.data.elastic | base64decode}}' >> /home/elastic/Machine_Learning_Workshop/.env
 echo '' >> /root/.env
-echo 'ELASTICSEARCH_URL="https://es.elastic.lab:443"' >> /root/.env
-echo 'KIBANA_URL="https://kb.elastic.lab:443"' >> /root/.env
-echo 'BUILD_NUMBER="10"' >> /root/.env
-echo 'ELASTIC_VERSION="9.1.0"' >> /root/.env
+echo 'ELASTICSEARCH_URL="https://es.elastic.lab:443"' >> /home/elastic/Machine_Learning_Workshop/.env
+echo 'KIBANA_URL="https://kb.elastic.lab:443"' >> /home/elastic/Machine_Learning_Workshop/.env
+echo 'BUILD_NUMBER="10"' >> /home/elastic/Machine_Learning_Workshop/.env
+echo 'ELASTIC_VERSION="9.1.0"' >> /home/elastic/Machine_Learning_Workshop/.env
 
 
 # Set up environment
-export $(cat /root/.env | xargs)
+export $(cat /home/elastic/Machine_Learning_Workshop/.env | xargs)
 
 BASE64=$(echo -n "elastic:${ELASTICSEARCH_PASSWORD}" | base64)
 KIBANA_URL_WITHOUT_PROTOCOL=$(echo $KIBANA_URL | sed -e 's#http[s]\?://##g')
