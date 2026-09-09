@@ -254,6 +254,142 @@ def write_spike_manifest(spikes, days):
     return manifest_path
 
 
+# ── Rare-event injection (PingOne audit) ─────────────────────────────────────
+#
+# Injects a tiny number of "rare" documents into logs-ping_one.audit-mortgage
+# so the Rare (by user.name / by source.geo.country_iso_code) and geo anomaly
+# ML jobs have a guaranteed needle in the haystack:
+#
+#   • source.geo.country_iso_code = "SU"        (Soviet Union — never in the
+#     normal generator's country list: US/CA/MX/CN/RU/NG)
+#   • user.name                   = "Mr. Snuffy" (never produced by full_name)
+#
+# The docs appear 2–3 times total across the whole backfill window, on
+# distinct days, so a rare detector flags them without them looking like a
+# burst. Runs after backfill completes and BEFORE the AD datafeeds start,
+# so the ML jobs process them on their first pass.
+
+RARE_DEFAULT_INDEX = "logs-ping_one.audit-mortgage"
+RARE_MAX_COUNT     = 3
+RARE_USER_NAME     = "Mr. Snuffy"
+RARE_ISO_CODE      = "SU"
+
+def _rare_doc(ts_iso, rng):
+    """Build one PingOne audit doc mirroring mortgage-workshop.yml's shape."""
+    action = rng.choice([
+        "USER.AUTHENTICATION.SUCCESS",
+        "USER.MFA.BYPASS",
+        "ADMIN.SAML.ASSERTION.CREATED",
+    ])
+    # Moscow-ish coordinates with a little jitter
+    lat = round(55.7558 + rng.uniform(-0.05, 0.05), 6)
+    lon = round(37.6173 + rng.uniform(-0.05, 0.05), 6)
+    return {
+        "@timestamp": ts_iso,
+        "ecs": {"version": "8.11.0"},
+        "data_stream": {"type": "logs", "dataset": "ping_one.audit",
+                        "namespace": "mortgage"},
+        "event": {
+            "kind": "event",
+            "category": "authentication",
+            "dataset": "ping_one.audit",
+            "action": action,
+            "outcome": "success",
+            "type": "user",
+        },
+        "input": {"type": "http_endpoint"},
+        "user": {
+            "id": "snuffy-uuid",
+            "email": "mr.snuffy@lendpath.com",
+            "name": RARE_USER_NAME,
+        },
+        "client": {"user": {"id": f"{rng.getrandbits(32):08x}-snuf",
+                            "name": "LendPath Portal"}},
+        "source": {
+            "ip": f"93.158.{rng.randint(1, 254)}.{rng.randint(1, 254)}",
+            "geo": {
+                "location": {"lat": lat, "lon": lon},
+                "country_iso_code": RARE_ISO_CODE,
+                "city_name": "Moscow",
+                "region_name": "Moscow",
+            },
+        },
+        "ping_one": {"audit": {
+            "action": {"type": action},
+            "actors": {"client": {"type": "CLIENT"},
+                       "user": {"type": "USER"}},
+            "result": {"status": "SUCCESS",
+                       "description": ("MFA bypass code used"
+                                       if action == "USER.MFA.BYPASS"
+                                       else "Authentication successful")},
+            "risk": {"score": round(rng.uniform(85, 100), 2),
+                     "level": "HIGH"},
+        }},
+        "tags": "ping_one-audit",
+    }
+
+def inject_rare_events(host, user, password, verify_ssl, days, tz,
+                       index_name=RARE_DEFAULT_INDEX, count=None, seed=None):
+    """
+    Index `count` rare PingOne audit docs (default: random 2 or 3, never
+    more than RARE_MAX_COUNT) at random timestamps on distinct days across
+    the backfill window.
+    """
+    try:
+        from elasticsearch import Elasticsearch
+    except ImportError:
+        print(" ⚠ Rare-event injection skipped: elasticsearch package not installed.")
+        return False
+
+    rng = random.Random(seed)
+    if count is None:
+        count = rng.randint(2, 3)
+    count = max(1, min(int(count), RARE_MAX_COUNT))
+
+    # Pick distinct days across the window (skip the very first day edge)
+    today = datetime.now(tz).date()
+    day_offsets = list(range(1, days)) or [0]
+    rng.shuffle(day_offsets)
+    chosen_days = sorted(day_offsets[:count])
+    while len(chosen_days) < count:                # window smaller than count
+        chosen_days.append(rng.choice(day_offsets))
+
+    docs = []
+    for d in chosen_days:
+        day = today - timedelta(days=days - 1 - d)
+        local_dt = datetime(day.year, day.month, day.day,
+                            rng.randint(1, 23), rng.randint(0, 59),
+                            rng.randint(0, 59),
+                            rng.randint(0, 999) * 1000, tzinfo=tz)
+        ts = local_dt.astimezone(timezone.utc)
+        ts_iso = ts.strftime("%Y-%m-%dT%H:%M:%S.") + f"{ts.microsecond // 1000:03d}Z"
+        docs.append(_rare_doc(ts_iso, rng))
+
+    ssl_opts = {} if verify_ssl else {"verify_certs": False,
+                                      "ssl_show_warn": False}
+    try:
+        es = Elasticsearch(host, basic_auth=(user, password), **ssl_opts)
+        ops = []
+        for doc in docs:
+            ops.append({"create": {"_index": index_name}})
+            ops.append(doc)
+        resp = es.bulk(operations=ops, refresh=True)
+        errors = [i for i in resp.get("items", [])
+                  if i.get("create", {}).get("status", 500) >= 300]
+        ok = len(docs) - len(errors)
+        print(f" ✓ Injected {ok}/{len(docs)} rare event(s) into {index_name}")
+        print(f"   user.name={RARE_USER_NAME!r}  "
+              f"source.geo.country_iso_code={RARE_ISO_CODE!r}")
+        for doc in docs:
+            print(f"   • {doc['@timestamp']}  {doc['event']['action']}")
+        if errors:
+            print(f" ⚠ {len(errors)} rare doc(s) failed: "
+                  f"{errors[0]['create'].get('error', {}).get('reason', 'unknown')}")
+        return ok > 0
+    except Exception as e:
+        print(f" ⚠ Rare-event injection failed: {e}")
+        return False
+
 # ── Output helpers ────────────────────────────────────────────────────────────
 
 def stream_output(proc, prefix, logfile):
@@ -318,7 +454,12 @@ def run_backfill(host, user, password, verify_ssl,
                  # ── post-backfill ML control ──
                  skip_ml=False,
                  skip_ad=False,
-                 skip_dfa=False):
+                 skip_dfa=False,
+                 # ── rare-event injection ──
+                 rare_count=None,
+                 rare_index=RARE_DEFAULT_INDEX,
+                 rare_seed=None,
+                 skip_rare=False):
 
     spikes = spikes or []
     run_script = os.path.join(_HERE, "run_workshop.py")
@@ -457,6 +598,16 @@ def run_backfill(host, user, password, verify_ssl,
             print(f"  ✓ {len(spikes)} anomaly spike(s) injected into timeline.")
         print("  ✓ Starting live generators now (continuing from present)…")
     print(f"{'='*68}\n")
+
+    # ── Rare-event injection (before AD datafeeds start) ─────────────────────
+    if skip_rare:
+        print(" Rare-event injection skipped (--skip-rare)\n")
+    else:
+        print("▸ Injecting rare PingOne audit events…")
+        inject_rare_events(host, user, password, verify_ssl, days, tz,
+                           index_name=rare_index, count=rare_count,
+                           seed=rare_seed)
+        print()
 
     # ── Post-backfill sequence ────────────────────────────────────────────────
     bs = bootstrap_script
@@ -637,6 +788,22 @@ Examples:
     ml_ctrl.add_argument("--skip-dfa", action="store_true", default=False,
                          help="Skip DFA job creation after backfill")
 
+    # ── Rare-event injection flags ─────────────────────────────────────────────
+    rare = p.add_argument_group(
+        "rare events",
+        "Inject a handful of rare PingOne audit docs (user.name='Mr. Snuffy',\n"
+        f"source.geo.country_iso_code='SU') into {RARE_DEFAULT_INDEX}."
+    )
+    rare.add_argument("--rare-count", type=int, default=None, metavar="N",
+                      help=f"How many rare docs to inject, max {RARE_MAX_COUNT} "
+                           "(default: random 2 or 3)")
+    rare.add_argument("--rare-index", default=RARE_DEFAULT_INDEX, metavar="IDX",
+                      help=f"Target data stream (default: {RARE_DEFAULT_INDEX})")
+    rare.add_argument("--rare-seed", type=int, default=None, metavar="N",
+                      help="Random seed for reproducible rare-doc placement")
+    rare.add_argument("--skip-rare", action="store_true", default=False,
+                      help="Skip rare-event injection entirely")
+
     # ── Anomaly spike flags ────────────────────────────────────────────────────
     spike = p.add_argument_group(
         "anomaly spikes",
@@ -737,6 +904,10 @@ Examples:
         skip_ml=args.skip_ml,
         skip_ad=args.skip_ad,
         skip_dfa=args.skip_dfa,
+        rare_count=args.rare_count,
+        rare_index=args.rare_index,
+        rare_seed=args.rare_seed,
+        skip_rare=args.skip_rare,
     )
 
 
